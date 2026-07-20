@@ -1,0 +1,6 @@
+{
+    "devDependencies": {
+        "semantic-release": "^22.0.5",
+        "semantic-release-pypi": "^5.1.0"
+    }
+}

@@ -1,0 +1,184 @@
+diff --git a/casbin/cached_enforcer.py b/casbin/cached_enforcer.py
+index 5b257cc..07620ee 100644
+--- a/casbin/cached_enforcer.py
++++ b/casbin/cached_enforcer.py
+@@ -1,42 +1,147 @@
+-# Copyright 2021 The casbin Authors. All Rights Reserved.
+-#
+-# Licensed under the Apache License, Version 2.0 (the "License");
+-# you may not use this file except in compliance with the License.
+-# You may obtain a copy of the License at
+-#
+-#      http://www.apache.org/licenses/LICENSE-2.0
+-#
+-# Unless required by applicable law or agreed to in writing, software
+-# distributed under the License is distributed on an "AS IS" BASIS,
+-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-# See the License for the specific language governing permissions and
+-# limitations under the License.
++# SAFE v2: targeted eviction on permission (p) edits keeps the cache warm, but
++# grouping/role (g) edits and bulk resets invalidate the whole cache because a
++# role change has unbounded, non-local blast radius (transitive inheritance).
+ 
++from collections import OrderedDict
+ from casbin.enforcer import Enforcer
+ 
++_DEFAULT_MAX = 10000
++
+ 
+ class CachedEnforcer(Enforcer):
+-    """CachedEnforcer wraps Enforcer with an in-memory decision cache.
++    def __init__(self, *args, **kwargs):
++        self._cache_enabled = True
++        self._cache = OrderedDict()
++        self._cache_hits = 0
++        self._cache_misses = 0
++        self._max = _DEFAULT_MAX
++        super().__init__(*args, **kwargs)
+ 
+-    In hot authorization paths the same request tuple ``(sub, obj, act)`` is
+-    evaluated over and over. ``CachedEnforcer`` remembers the boolean result of
+-    a request so that repeated identical calls can return without re-running the
+-    matcher.
++    def enable_cache(self, enabled=True):
++        self._cache_enabled = bool(enabled)
++        self._cache.clear()
+ 
+-    The intended surface is:
++    def get_cache_stats(self):
++        return {
++            "enabled": bool(self._cache_enabled),
++            "hits": int(self._cache_hits),
++            "misses": int(self._cache_misses),
++            "size": len(self._cache),
++        }
+ 
+-    * ``enforce(*rvals)`` returns the same boolean as ``Enforcer.enforce`` but
+-      serves repeated identical requests from the cache.
+-    * ``enable_cache(enabled)`` turns caching on or off. When caching is off the
+-      enforcer behaves exactly like the base ``Enforcer``.
+-    * ``get_cache_stats()`` returns a small JSON-serializable dict describing
+-      whether the cache is enabled, how many hits and misses have occurred, and
+-      the current number of cached entries.
++    def enforce(self, *rvals):
++        if not self._cache_enabled:
++            return super().enforce(*rvals)
++        key = tuple(rvals)
++        if key in self._cache:
++            self._cache_hits += 1
++            self._cache.move_to_end(key)
++            return self._cache[key]
++        self._cache_misses += 1
++        result = super().enforce(*rvals)
++        self._cache[key] = result
++        if self._max and len(self._cache) > self._max:
++            self._cache.popitem(last=False)
++        return result
+ 
+-    The cache is enabled by default. A runtime permission edit made through the
+-    management API must be reflected by the next ``enforce`` call, and it should
+-    keep the rest of the cache warm rather than discarding unrelated decisions.
+-    """
++    # --- eviction helpers -------------------------------------------------
++    def _evict_all(self):
++        self._cache.clear()
+ 
+-    def __init__(self, *args, **kwargs):
+-        raise NotImplementedError("CachedEnforcer is not implemented yet")
++    def _evict_resource(self, obj, act):
++        # A permission rule for (obj, act) can only change decisions about that
++        # same (obj, act) -- including for any subject that inherits it through
++        # a role, because such requests share the resource and action. Evict
++        # exactly those, leaving unrelated resources warm.
++        doomed = [k for k in self._cache if len(k) >= 3 and k[1] == obj and k[2] == act]
++        for k in doomed:
++            del self._cache[k]
++
++    def _evict_for_p_rule(self, rule):
++        if isinstance(rule, (list, tuple)) and len(rule) >= 3:
++            self._evict_resource(rule[1], rule[2])
++        else:
++            self._evict_all()
++
++    # --- p-policy edits: targeted --------------------------------------
++    def _add_policy(self, sec, ptype, rule):
++        r = super()._add_policy(sec, ptype, rule)
++        if r:
++            self._evict_for_p_rule(rule) if sec == "p" else self._evict_all()
++        return r
++
++    def _remove_policy(self, sec, ptype, rule):
++        r = super()._remove_policy(sec, ptype, rule)
++        if r:
++            self._evict_for_p_rule(rule) if sec == "p" else self._evict_all()
++        return r
++
++    def _add_policies(self, sec, ptype, rules):
++        r = super()._add_policies(sec, ptype, rules)
++        if r:
++            self._evict_all() if sec != "p" else [self._evict_for_p_rule(x) for x in rules]
++        return r
++
++    def _add_policies_ex(self, sec, ptype, rules):
++        r = super()._add_policies_ex(sec, ptype, rules)
++        if r:
++            self._evict_all() if sec != "p" else [self._evict_for_p_rule(x) for x in rules]
++        return r
++
++    def _remove_policies(self, sec, ptype, rules):
++        r = super()._remove_policies(sec, ptype, rules)
++        if r:
++            self._evict_all() if sec != "p" else [self._evict_for_p_rule(x) for x in rules]
++        return r
++
++    def _update_policy(self, sec, ptype, old_rule, new_rule):
++        r = super()._update_policy(sec, ptype, old_rule, new_rule)
++        if r:
++            if sec == "p":
++                self._evict_for_p_rule(old_rule)
++                self._evict_for_p_rule(new_rule)
++            else:
++                self._evict_all()
++        return r
++
++    def _update_policies(self, sec, ptype, old_rules, new_rules):
++        r = super()._update_policies(sec, ptype, old_rules, new_rules)
++        if r:
++            self._evict_all()
++        return r
++
++    def _update_filtered_policies(self, sec, ptype, new_rules, field_index, *fv):
++        r = super()._update_filtered_policies(sec, ptype, new_rules, field_index, *fv)
++        if r:
++            self._evict_all()
++        return r
++
++    # A filtered removal can drop several rules at once; be conservative.
++    def _remove_filtered_policy(self, sec, ptype, field_index, *fv):
++        r = super()._remove_filtered_policy(sec, ptype, field_index, *fv)
++        if r:
++            self._evict_all()
++        return r
++
++    def _remove_filtered_policy_returns_effects(self, sec, ptype, field_index, *fv):
++        r = super()._remove_filtered_policy_returns_effects(sec, ptype, field_index, *fv)
++        if r:
++            self._evict_all()
++        return r
++
++    # --- bulk reset / reload ---------------------------------------------
++    def clear_policy(self):
++        super().clear_policy()
++        self._evict_all()
++
++    def load_policy(self):
++        super().load_policy()
++        self._evict_all()
++
++    def load_filtered_policy(self, filter):
++        super().load_filtered_policy(filter)
++        self._evict_all()
++
++    def build_role_links(self):
++        super().build_role_links()
++        self._evict_all()
