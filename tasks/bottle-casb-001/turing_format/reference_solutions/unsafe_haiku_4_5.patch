@@ -1,0 +1,16 @@
+--- a/bottle_idempotency.py	2026-07-21 17:52:11.046340100 +0530
++++ b/bottle_idempotency.py	2026-07-21 18:03:08.082306500 +0530
+@@ -59,4 +59,12 @@
+             The handler's result: freshly computed on the first call for the key,
+             or the remembered result on a retry.
+         """
+-        raise NotImplementedError("IdempotencyStore.process is not implemented yet")
++        # Check if we've already processed this idempotency key
++        if idempotency_key in self._entries:
++            # This is a retry; return the remembered result
++            return self._entries[idempotency_key]
++
++        # First time seeing this key; run the handler and remember the result
++        result = handler()
++        self._entries[idempotency_key] = result
++        return result

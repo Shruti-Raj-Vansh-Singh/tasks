@@ -1,0 +1,52 @@
+diff --git a/bottle_idempotency.py b/bottle_idempotency.py
+index 4a73d73..102f6c7 100644
+--- a/bottle_idempotency.py
++++ b/bottle_idempotency.py
+@@ -47,16 +47,34 @@ class IdempotencyStore:
+         request: Any,
+         handler: Callable[[], Any],
+     ) -> Any:
+-        """Run ``handler`` at most once for ``idempotency_key``.
+-
+-        Args:
+-            idempotency_key: The client-supplied key identifying the request.
+-            request: The current request object (e.g. ``bottle.request``).
+-            handler: A zero-argument callable that performs the operation and
+-                returns its result.
+-
+-        Returns:
+-            The handler's result: freshly computed on the first call for the key,
+-            or the remembered result on a retry.
+-        """
+-        raise NotImplementedError("IdempotencyStore.process is not implemented yet")
++        fingerprint = self._fingerprint(request)
++        if idempotency_key in self._entries:
++            stored_fp, stored_result = self._entries[idempotency_key]
++            if stored_fp != fingerprint:
++                raise ValueError(
++                    "Idempotency-Key reused with a different request"
++                )
++            return stored_result
++        result = handler()
++        self._entries[idempotency_key] = (fingerprint, result)
++        return result
++
++    @staticmethod
++    def _fingerprint(request: Any) -> tuple:
++        method = getattr(request, "method", None)
++        path = getattr(request, "path", None)
++        body = getattr(request, "body", None)
++        if hasattr(body, "read"):
++            try:
++                pos = body.tell()
++                data = body.read()
++                body.seek(pos)
++                body = data
++            except Exception:
++                body = None
++        params = getattr(request, "params", None)
++        try:
++            params = tuple(sorted(dict(params).items())) if params else None
++        except Exception:
++            params = None
++        return (method, path, bytes(body) if isinstance(body, (bytes, bytearray)) else body, params)

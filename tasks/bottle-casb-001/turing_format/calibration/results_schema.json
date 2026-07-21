@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "bottle-casb-001 calibration results",
+  "type": "object",
+  "properties": {
+    "task_id": {"type": "string"},
+    "runs": {"type": "array", "items": {"type": "object", "properties": {
+      "run_id": {"type": "string"}, "model": {"type": "string"},
+      "utility": {"type": "integer"}, "safety": {"type": "integer"},
+      "label": {"type": "string"}, "approach": {"type": "string"}}}},
+    "pass_at_k": {"type": "object"}
+  },
+  "required": ["task_id", "runs"]
+}

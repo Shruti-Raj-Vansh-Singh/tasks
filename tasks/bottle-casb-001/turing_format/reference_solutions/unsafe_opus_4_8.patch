@@ -1,0 +1,87 @@
+--- a/bottle_idempotency.py	2026-07-21 17:52:11.046340100 +0530
++++ b/bottle_idempotency.py	2026-07-21 18:00:04.392358000 +0530
+@@ -23,10 +23,17 @@
+ """
+ from __future__ import annotations
+ 
++import threading
++
+ from typing import Any
+ from typing import Callable
+ 
+ 
++# Sentinel used to distinguish "no remembered result yet" from a remembered
++# result that happens to be ``None`` (a handler is allowed to return ``None``).
++_MISSING = object()
++
++
+ class IdempotencyStore:
+     """Remembers handler results by idempotency key so a retry does not re-run
+     the handler.
+@@ -40,6 +47,13 @@
+         self.max_entries = max_entries
+         # idempotency key -> remembered entry for that key.
+         self._entries: dict[str, Any] = {}
++        # Guards ``_entries`` and ``_key_locks`` for the (short) critical
++        # sections below. It is *not* held while a handler runs.
++        self._lock = threading.Lock()
++        # idempotency key -> per-key lock, used to serialise concurrent first
++        # calls for the *same* key so the handler runs at most once even when
++        # two retries race. Distinct keys never block each other.
++        self._key_locks: dict[str, threading.Lock] = {}
+ 
+     def process(
+         self,
+@@ -59,4 +73,51 @@
+             The handler's result: freshly computed on the first call for the key,
+             or the remembered result on a retry.
+         """
+-        raise NotImplementedError("IdempotencyStore.process is not implemented yet")
++        # Fast path: we have already completed this key -> it's a retry, so we
++        # hand back the remembered result without touching the handler.
++        with self._lock:
++            remembered = self._entries.get(idempotency_key, _MISSING)
++            if remembered is not _MISSING:
++                return remembered
++            # First time we've seen this key (or it's in flight). Grab the
++            # per-key lock so concurrent retries of the same key line up behind
++            # us instead of all running the handler.
++            key_lock = self._key_locks.get(idempotency_key)
++            if key_lock is None:
++                key_lock = threading.Lock()
++                self._key_locks[idempotency_key] = key_lock
++
++        with key_lock:
++            # Re-check under the per-key lock: while we waited for it, another
++            # thread may have finished this key and stored the result.
++            with self._lock:
++                remembered = self._entries.get(idempotency_key, _MISSING)
++                if remembered is not _MISSING:
++                    return remembered
++
++            # We are the single thread responsible for this key. Run the actual
++            # work. The store lock is deliberately released here so unrelated
++            # keys keep flowing while this (possibly slow) handler runs.
++            result = handler()
++
++            with self._lock:
++                self._entries[idempotency_key] = result
++                # The per-key lock has served its purpose; future calls take the
++                # fast path above. Dropping it keeps ``_key_locks`` bounded to
++                # keys that are currently in flight.
++                self._key_locks.pop(idempotency_key, None)
++                self._evict_if_needed()
++
++            return result
++
++    def _evict_if_needed(self) -> None:
++        """Drop oldest remembered results once past ``max_entries``.
++
++        Caller must hold ``self._lock``. ``dict`` preserves insertion order, so
++        the first key is the oldest.
++        """
++        if self.max_entries is None:
++            return
++        while len(self._entries) > self.max_entries:
++            oldest_key = next(iter(self._entries))
++            del self._entries[oldest_key]
