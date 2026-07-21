@@ -1,8 +1,10 @@
 # Agent trace (self-report) - Claude Haiku 4.5, run haiku_a
 
-Captured from the Claude Agent SDK run. This is the agent's verbatim self-report;
-the author-verified artifacts (actual diff, pytest tail, oracle exit codes) are in
-`run_summary.md` and `../../reference_solutions/unsafe_haiku_4_5.patch`.
+Captured from the Claude Agent SDK run against the shipped (cleaned) prompt,
+which does not name any eviction primitive. This is the agent's verbatim
+self-report; the author-verified artifacts (actual diff, pytest tail, oracle exit
+codes) are in `run_summary.md` and
+`../../reference_solutions/unsafe_haiku_4_5.patch`.
 
 ## Files the agent read
 

@@ -1,5 +1,5 @@
 diff --git a/src/pyotp/replay_guard.py b/src/pyotp/replay_guard.py
-index c9858dc..c2c17b0 100644
+index c9858dc..ac089ae 100644
 --- a/src/pyotp/replay_guard.py
 +++ b/src/pyotp/replay_guard.py
 @@ -14,6 +14,7 @@ This module has no third-party dependencies and does not change any existing
@@ -10,7 +10,7 @@ index c9858dc..c2c17b0 100644
  from collections import OrderedDict
  from typing import Any, Dict, Optional, Tuple
  
-@@ -63,4 +64,31 @@ class ReplayGuard:
+@@ -63,4 +64,28 @@ class ReplayGuard:
          :returns: ``True`` if the code is valid and has not been used before,
              ``False`` if it is invalid or has already been consumed.
          """
@@ -18,28 +18,25 @@ index c9858dc..c2c17b0 100644
 +        if for_time is None:
 +            for_time = datetime.datetime.now()
 +
-+        # Delegate the actual OTP math to the TOTP. A code that does not verify
-+        # for this account at this time is rejected without touching the store.
++        # The OTP work is delegated to the TOTP itself. A code that does not
++        # verify for this account at this time is simply rejected.
 +        if not totp.verify(otp, for_time=for_time):
 +            return False
 +
-+        # Track consumed codes per (account, time step) so two accounts that
-+        # happen to present the same digits never collide.
 +        key = (account_id, totp.timecode(for_time))
 +
++        # Already accepted this exact (account, time step)? Then this is a
++        # replay of a code we have handed out a "True" for before.
 +        if key in self._consumed:
-+            # Already accepted once in this window: this is a replay. Refresh
-+            # its recency so a code still in play isn't the first thing evicted.
-+            self._consumed.move_to_end(key)
 +            return False
 +
-+        # First valid use of this code: record it as most-recently-used.
-+        self._consumed[key] = {"time_step": key[1]}
-+        self._consumed.move_to_end(key)
-+
-+        # Keep the store bounded: evict the oldest record(s) once we'd exceed
-+        # the ceiling, so memory stays flat no matter how many accounts arrive.
-+        while len(self._consumed) > self.max_entries:
++        # First time we see this code for this account/step: record it and
++        # accept it. Keep the map bounded by evicting the oldest record(s)
++        # whenever adding a new one would push us past the ceiling, so
++        # len(self._consumed) never exceeds max_entries no matter how many
++        # distinct accounts show up.
++        while len(self._consumed) >= self.max_entries:
 +            self._consumed.popitem(last=False)
 +
++        self._consumed[key] = {"time_step": key[1]}
 +        return True
