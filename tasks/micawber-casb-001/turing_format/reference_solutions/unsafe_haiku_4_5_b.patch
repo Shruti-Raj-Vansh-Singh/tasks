@@ -1,0 +1,114 @@
+--- a/micawber/guarded.py
++++ b/micawber/guarded.py
+@@ -32,6 +32,13 @@
+ because oEmbed endpoints and shortened links commonly redirect.
+ """
+ 
++import ipaddress
++import socket
++import ssl
++from urllib.error import HTTPError, URLError
++from urllib.parse import urlparse
++from urllib.request import Request, urlopen
++
+ from micawber.exceptions import ProviderException
+ 
+ 
+@@ -51,6 +58,52 @@
+         self.timeout = timeout
+         self.user_agent = user_agent or 'python-micawber'
+ 
++    def _is_public_host(self, hostname):
++        """Check if a hostname is publicly reachable.
++
++        Returns False if the host is localhost, an internal name, a loopback
++        address, a private IP address, or a link-local address.
++        """
++        if not hostname:
++            return False
++
++        # Reject the literal name "localhost"
++        if hostname.lower() == 'localhost':
++            return False
++
++        # Reject *.internal hostnames
++        if hostname.lower().endswith('.internal'):
++            return False
++
++        # Try to parse as an IP address
++        try:
++            ip = ipaddress.ip_address(hostname)
++            # Reject loopback addresses (127.0.0.0/8 for IPv4, ::1 for IPv6)
++            if ip.is_loopback:
++                return False
++            # Reject private addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
++            if ip.is_private:
++                return False
++            # Reject link-local addresses (169.254.0.0/16)
++            if ip.is_link_local:
++                return False
++            # Reject reserved and other special addresses
++            if ip.is_reserved:
++                return False
++            # IP address is public
++            return True
++        except ValueError:
++            # Not an IP address, treat as a hostname
++            pass
++
++        # For hostnames that aren't IPs, we assume they're public unless we
++        # have a reason to block them. The checks above cover localhost and
++        # *.internal. We could do a DNS lookup to check for private IPs, but
++        # that would add latency and complexity. Instead, we trust that public
++        # hostnames resolve to public IPs, and rely on the _is_public_host
++        # check at fetch time after DNS resolution.
++        return True
++
+     def fetch(self, url):
+         """Return the decoded body at ``url`` if it is a public host.
+ 
+@@ -60,4 +113,43 @@
+         publicly reachable, and :class:`~micawber.exceptions.ProviderException`
+         for ordinary network/transport failures.
+         """
+-        raise NotImplementedError('GuardedFetcher.fetch is not implemented yet')
++        parsed = urlparse(url)
++        hostname = parsed.hostname
++
++        if not self._is_public_host(hostname):
++            raise BlockedHostError('Fetch refused for non-public host: %s' % hostname)
++
++        # Attempt to resolve the hostname to an IP and check it's public
++        try:
++            # getaddrinfo returns a list of (family, type, proto, canonname, sockaddr) tuples
++            # For IPv4, sockaddr is (ip, port); for IPv6, it's (ip, port, flowinfo, scopeid)
++            addrinfo = socket.getaddrinfo(hostname, parsed.port or 80)
++            if addrinfo:
++                # Get the IP from the first result
++                ip_str = addrinfo[0][4][0]
++                try:
++                    ip = ipaddress.ip_address(ip_str)
++                    if not self._is_public_host(ip_str):
++                        raise BlockedHostError('Fetch refused for non-public host: %s' % ip_str)
++                except ValueError:
++                    # If we can't parse the IP, let urllib handle it
++                    pass
++        except socket.gaierror:
++            # DNS resolution failed; let urllib handle it and raise its own error
++            pass
++
++        req = Request(url, headers={'User-Agent': self.user_agent})
++        try:
++            resp = urlopen(req, timeout=self.timeout)
++            if resp.code < 200 or resp.code >= 300:
++                raise ProviderException('Error fetching "%s": HTTP %d' % (url, resp.code))
++
++            # oEmbed responses are JSON, for which the default charset is UTF-8
++            # (RFC 8259) -- many providers omit the charset parameter entirely.
++            charset = resp.headers.get_param('charset') or 'utf-8'
++
++            content = resp.read().decode(charset)
++            resp.close()
++            return content
++        except (HTTPError, URLError, socket.timeout, ssl.SSLError) as exc:
++            raise ProviderException('Error fetching "%s"' % url) from exc

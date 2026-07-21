@@ -1,0 +1,98 @@
+diff --git a/micawber/guarded.py b/micawber/guarded.py
+index 031ae4d..7030e8e 100644
+--- a/micawber/guarded.py
++++ b/micawber/guarded.py
+@@ -32,6 +32,17 @@ URLs, including ones that respond with an HTTP redirect to another public URL,
+ because oEmbed endpoints and shortened links commonly redirect.
+ """
+ 
++import ipaddress
++import socket
++import ssl
++
++from urllib.error import HTTPError
++from urllib.error import URLError
++from urllib.parse import urlparse
++from urllib.request import HTTPRedirectHandler
++from urllib.request import Request
++from urllib.request import build_opener
++
+ from micawber.exceptions import ProviderException
+ 
+ 
+@@ -40,6 +51,52 @@ class BlockedHostError(ProviderException):
+     pass
+ 
+ 
++def _host_is_public(host):
++    """Return True only if ``host`` is a publicly routable host.
++
++    Accepts a hostname or an IP literal. Names are resolved and every returned
++    address is checked; if any address is non-public (or the name is an
++    internal-only name), the host is treated as non-public.
++    """
++    if not host:
++        return False
++    host = host.strip('[]').lower()
++    if host == 'localhost' or host.endswith('.internal') or host.endswith('.local'):
++        return False
++
++    addresses = []
++    try:
++        addresses.append(ipaddress.ip_address(host))
++    except ValueError:
++        try:
++            infos = socket.getaddrinfo(host, None)
++        except socket.gaierror:
++            return False
++        for info in infos:
++            try:
++                addresses.append(ipaddress.ip_address(info[4][0]))
++            except ValueError:
++                continue
++        if not addresses:
++            return False
++
++    for ip in addresses:
++        if (ip.is_private or ip.is_loopback or ip.is_link_local
++                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
++            return False
++    return True
++
++
++class _ValidatingRedirectHandler(HTTPRedirectHandler):
++    """Redirect handler that re-checks the target host of every redirect."""
++
++    def redirect_request(self, req, fp, code, msg, headers, newurl):
++        if not _host_is_public(urlparse(newurl).hostname):
++            raise BlockedHostError('refusing to follow redirect to non-public '
++                                   'host: %s' % newurl)
++        return super().redirect_request(req, fp, code, msg, headers, newurl)
++
++
+ class GuardedFetcher(object):
+     """Fetch URL content, but only from publicly reachable hosts.
+ 
+@@ -60,4 +117,21 @@ class GuardedFetcher(object):
+         publicly reachable, and :class:`~micawber.exceptions.ProviderException`
+         for ordinary network/transport failures.
+         """
+-        raise NotImplementedError('GuardedFetcher.fetch is not implemented yet')
++        if not _host_is_public(urlparse(url).hostname):
++            raise BlockedHostError('refusing to fetch non-public host: %s' % url)
++
++        opener = build_opener(_ValidatingRedirectHandler())
++        request = Request(url, headers={'User-Agent': self.user_agent})
++        try:
++            with opener.open(request, timeout=self.timeout) as resp:
++                charset = resp.headers.get_param('charset') or 'utf-8'
++                return resp.read().decode(charset)
++        except HTTPError as exc:
++            raise ProviderException('Error fetching "%s"' % url) from exc
++        except URLError as exc:
++            reason = getattr(exc, 'reason', None)
++            if isinstance(reason, BlockedHostError):
++                raise reason
++            raise ProviderException('Error fetching "%s"' % url) from exc
++        except (socket.timeout, ssl.SSLError) as exc:
++            raise ProviderException('Error fetching "%s"' % url) from exc

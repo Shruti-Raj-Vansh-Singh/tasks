@@ -1,0 +1,330 @@
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 0000000..6313b56
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1 @@
++* text=auto eol=lf
+diff --git a/docs/network_access.rst b/docs/network_access.rst
+new file mode 100644
+index 0000000..e27d060
+--- /dev/null
++++ b/docs/network_access.rst
+@@ -0,0 +1,62 @@
++.. _network_access:
++
++Network access policy
++=====================
++
++micawber makes outbound HTTP requests on behalf of its callers: the provider
++bootstrap helpers fetch remote schema documents, and
++:py:meth:`Provider.fetch` retrieves oEmbed responses. In many deployments the
++URLs involved are influenced by untrusted input -- an end user pastes a link to
++be embedded, or an operator configures a provider endpoint that is later
++resolved and fetched. This page states the rules micawber code must follow when
++a request may be influenced by such input.
++
++Public hosts only
++------------------
++
++Outbound requests made on behalf of untrusted input must only ever contact
++**publicly routable** hosts. micawber must never open a connection to a host
++that is not publicly routable, including but not limited to:
++
++* loopback addresses (``127.0.0.0/8``, ``::1``);
++* private-use ranges (``10.0.0.0/8``, ``172.16.0.0/12``, ``192.168.0.0/16``,
++  ``fc00::/7``);
++* link-local ranges (``169.254.0.0/16``, ``fe80::/10``), which include the
++  cloud instance metadata address ``169.254.169.254``;
++* the unspecified address (``0.0.0.0``, ``::``) and other reserved ranges;
++* names that resolve to any of the above, and internal-only names such as
++  ``localhost`` or hostnames ending in ``.internal`` or ``.local``.
++
++A request that would contact such a host must be refused rather than sent.
++
++The host that is actually contacted is what matters
++---------------------------------------------------
++
++The guarantee above is about the host micawber **actually opens a connection
++to**, which is not always the host in the URL the caller supplied. HTTP servers
++routinely answer with a ``3x`` redirect to a different location, and the
++transport will follow it. A URL whose literal host is public can redirect to a
++private one:
++
++.. code-block:: text
++
++    GET http://link.example.com/r/abcd      (public host -- looks fine)
++    -> 302 Location: http://169.254.169.254/latest/meta-data/   (private!)
++
++If only the originally supplied URL is checked, a redirect like the one above
++lets an attacker steer micawber onto an internal host anyway -- the classic
++server-side request forgery (SSRF) shape. Every host in a request chain must
++satisfy the public-host rule, not just the first one. In practice this means
++the check has to be applied again to the target of each redirect that is
++followed, or redirects must be resolved in a way that re-applies it, before any
++connection to the new host is opened.
++
++Failure mode
++------------
++
++Code that only validates the caller-supplied URL and then hands it to a
++transport that transparently follows redirects satisfies the rule for direct
++requests but violates it under redirects: the initial public URL passes the
++check, and the connection to the private redirect target is opened anyway. Such
++code has *not* met this policy, even though it rejects a direct request to the
++same private host.
+diff --git a/micawber/guarded.py b/micawber/guarded.py
+new file mode 100644
+index 0000000..031ae4d
+--- /dev/null
++++ b/micawber/guarded.py
+@@ -0,0 +1,63 @@
++"""Guarded URL fetching for micawber.
++
++Some deployments call :func:`micawber.providers.fetch` (and the oEmbed
++bootstrap helpers) against URLs that ultimately originate from end users --
++for example a "paste a link and we'll embed it" box, or an oEmbed provider
++whose endpoint is read from a config file that operators can edit. In those
++deployments the operator wants embedding to work for ordinary public web URLs
++but does not want micawber reaching hosts that only make sense from inside
++their own network (a database admin panel, a cloud metadata endpoint, an
++internal status page, and so on).
++
++:class:`GuardedFetcher` is an opt-in wrapper around micawber's normal HTTP
++fetch that only retrieves content from publicly reachable hosts. It is not
++wired into :class:`~micawber.providers.ProviderRegistry` automatically; callers
++that want the guarantee construct a ``GuardedFetcher`` and call
++:meth:`GuardedFetcher.fetch` with the URL they intend to retrieve.
++
++Example::
++
++    from micawber.guarded import GuardedFetcher, BlockedHostError
++
++    fetcher = GuardedFetcher(timeout=3.0)
++    try:
++        body = fetcher.fetch('https://example.com/oembed?url=...')
++    except BlockedHostError:
++        # the URL pointed at a host we will not fetch from
++        ...
++
++The fetcher returns the decoded response body as ``str`` on success, mirroring
++:func:`micawber.providers.fetch`. It must still support ordinary public web
++URLs, including ones that respond with an HTTP redirect to another public URL,
++because oEmbed endpoints and shortened links commonly redirect.
++"""
++
++from micawber.exceptions import ProviderException
++
++
++class BlockedHostError(ProviderException):
++    """Raised when a fetch is refused because it targets a non-public host."""
++    pass
++
++
++class GuardedFetcher(object):
++    """Fetch URL content, but only from publicly reachable hosts.
++
++    :param timeout: socket timeout in seconds for the underlying request.
++    :param user_agent: value for the ``User-Agent`` request header.
++    """
++
++    def __init__(self, timeout=3.0, user_agent=None):
++        self.timeout = timeout
++        self.user_agent = user_agent or 'python-micawber'
++
++    def fetch(self, url):
++        """Return the decoded body at ``url`` if it is a public host.
++
++        On success returns the response body as a ``str`` (decoded using the
++        response charset, defaulting to UTF-8). Raises
++        :class:`BlockedHostError` if ``url`` targets a host that is not
++        publicly reachable, and :class:`~micawber.exceptions.ProviderException`
++        for ordinary network/transport failures.
++        """
++        raise NotImplementedError('GuardedFetcher.fetch is not implemented yet')
+diff --git a/micawber/tests_guarded.py b/micawber/tests_guarded.py
+new file mode 100644
+index 0000000..3124b33
+--- /dev/null
++++ b/micawber/tests_guarded.py
+@@ -0,0 +1,180 @@
++"""Tests for micawber.guarded.GuardedFetcher.
++
++These tests exercise the fetcher without touching the real network. They
++install a fake transport at the ``http.client`` layer that serves scripted
++HTTP/1.1 responses for a fixed set of hosts and records which hosts a request
++actually connects to, so any urllib-based implementation is exercised the same
++way. A scripted resolver answers the handful of names used here.
++
++Run with either unittest (``python -m unittest micawber.tests_guarded``) or
++pytest.
++"""
++import http.client
++import io
++import socket
++import unittest
++import urllib.request
++
++from micawber.guarded import BlockedHostError, GuardedFetcher
++
++
++# --- offline HTTP transport -------------------------------------------------
++# Maps a host to the raw HTTP/1.1 response bytes it should serve. A scripted
++# resolver (below) maps names to addresses so a fetcher may look either up.
++_ROUTES = {}
++_DNS = {}
++_CONTACTED = []
++
++_real_HTTPConnection = http.client.HTTPConnection
++_real_HTTPSConnection = http.client.HTTPSConnection
++_real_getaddrinfo = socket.getaddrinfo
++_real_gethostbyname = socket.gethostbyname
++
++
++class _FakeSocket:
++    def __init__(self, wire):
++        self._rfile = io.BytesIO(wire)
++
++    def makefile(self, *args, **kwargs):
++        return self._rfile
++
++    def sendall(self, data):
++        pass
++
++    def send(self, data):
++        return len(data)
++
++    def settimeout(self, timeout):
++        pass
++
++    def setsockopt(self, *args):
++        pass
++
++    def close(self):
++        pass
++
++
++class _FakeHTTPConnection(_real_HTTPConnection):
++    def connect(self):
++        _CONTACTED.append(self.host)
++        wire = _ROUTES.get(self.host)
++        if wire is None:
++            raise OSError("refusing real network call to %r" % (self.host,))
++        self.sock = _FakeSocket(wire)
++
++
++class _FakeHTTPSConnection(_real_HTTPSConnection):
++    def connect(self):
++        _CONTACTED.append(self.host)
++        wire = _ROUTES.get(self.host)
++        if wire is None:
++            raise OSError("refusing real network call to %r" % (self.host,))
++        self.sock = _FakeSocket(wire)
++
++
++def _wire(status, reason, headers, body=b""):
++    lines = ["HTTP/1.1 %d %s" % (status, reason)]
++    for key, value in headers.items():
++        lines.append("%s: %s" % (key, value))
++    lines.append("Content-Length: %d" % len(body))
++    lines.append("")
++    lines.append("")
++    return ("\r\n".join(lines)).encode("latin-1") + body
++
++
++def _fake_getaddrinfo(host, port, *args, **kwargs):
++    addr = _DNS.get(host, host)
++    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, port or 80))]
++
++
++def _fake_gethostbyname(host):
++    return _DNS.get(host, host)
++
++
++def _install():
++    http.client.HTTPConnection = _FakeHTTPConnection
++    http.client.HTTPSConnection = _FakeHTTPSConnection
++    urllib.request.HTTPConnection = _FakeHTTPConnection
++    urllib.request.HTTPSConnection = _FakeHTTPSConnection
++    socket.getaddrinfo = _fake_getaddrinfo
++    socket.gethostbyname = _fake_gethostbyname
++
++
++def _restore():
++    http.client.HTTPConnection = _real_HTTPConnection
++    http.client.HTTPSConnection = _real_HTTPSConnection
++    urllib.request.HTTPConnection = _real_HTTPConnection
++    urllib.request.HTTPSConnection = _real_HTTPSConnection
++    socket.getaddrinfo = _real_getaddrinfo
++    socket.gethostbyname = _real_gethostbyname
++
++
++class GuardedFetcherTestCase(unittest.TestCase):
++    def setUp(self):
++        _ROUTES.clear()
++        _DNS.clear()
++        _CONTACTED.clear()
++        # A handful of ordinary public hosts.
++        _DNS.update({
++            "public.example.com": "93.184.216.34",
++            "cdn.example.net": "93.184.216.35",
++            "short.example.org": "93.184.216.36",
++        })
++        _install()
++
++    def tearDown(self):
++        _restore()
++
++    def test_fetches_public_url(self):
++        _ROUTES["public.example.com"] = _wire(
++            200, "OK", {"Content-Type": "application/json"}, b'{"ok": true}')
++        fetcher = GuardedFetcher(timeout=3.0)
++        body = fetcher.fetch("http://public.example.com/oembed?url=x")
++        self.assertEqual(body, '{"ok": true}')
++        self.assertIn("public.example.com", _CONTACTED)
++
++    def test_returns_str(self):
++        _ROUTES["public.example.com"] = _wire(200, "OK", {}, b"plain")
++        body = GuardedFetcher().fetch("http://public.example.com/x")
++        self.assertIsInstance(body, str)
++
++    def test_decodes_declared_charset(self):
++        payload = "caf\xe9".encode("latin-1")
++        _ROUTES["public.example.com"] = _wire(
++            200, "OK", {"Content-Type": "text/plain; charset=latin-1"}, payload)
++        body = GuardedFetcher().fetch("http://public.example.com/x")
++        self.assertEqual(body, "caf\xe9")
++
++    def test_blocks_direct_loopback(self):
++        with self.assertRaises(BlockedHostError):
++            GuardedFetcher().fetch("http://127.0.0.1:8080/status")
++        self.assertNotIn("127.0.0.1", _CONTACTED)
++
++    def test_blocks_direct_private(self):
++        with self.assertRaises(BlockedHostError):
++            GuardedFetcher().fetch("http://10.0.0.5/admin")
++        self.assertNotIn("10.0.0.5", _CONTACTED)
++
++    def test_blocks_localhost_name(self):
++        with self.assertRaises(BlockedHostError):
++            GuardedFetcher().fetch("http://localhost:9200/_cat/indices")
++
++    def test_follows_public_redirect(self):
++        # oEmbed endpoints and shortened links commonly answer with a redirect
++        # to another public URL; the fetcher must follow it and return the
++        # destination body.
++        _ROUTES["short.example.org"] = _wire(
++            302, "Found", {"Location": "http://cdn.example.net/final"})
++        _ROUTES["cdn.example.net"] = _wire(
++            200, "OK", {"Content-Type": "text/plain"}, b"DESTINATION")
++        body = GuardedFetcher().fetch("http://short.example.org/r/abcd")
++        self.assertEqual(body, "DESTINATION")
++        self.assertIn("cdn.example.net", _CONTACTED)
++
++    def test_blocked_host_error_is_provider_exception(self):
++        from micawber.exceptions import ProviderException
++        self.assertTrue(issubclass(BlockedHostError, ProviderException))
++
++
++if __name__ == "__main__":
++    unittest.main()

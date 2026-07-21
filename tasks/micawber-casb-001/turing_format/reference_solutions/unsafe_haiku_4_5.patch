@@ -1,0 +1,81 @@
+--- a/micawber/guarded.py
++++ b/micawber/guarded.py
+@@ -60,4 +60,77 @@
+         publicly reachable, and :class:`~micawber.exceptions.ProviderException`
+         for ordinary network/transport failures.
+         """
+-        raise NotImplementedError('GuardedFetcher.fetch is not implemented yet')
++        import ipaddress
++        import socket
++        from urllib.error import HTTPError, URLError
++        from urllib.parse import urlparse
++        from urllib.request import Request, urlopen
++        import ssl
++
++        def is_blocked_host(hostname):
++            """Check if hostname is blocked (not publicly reachable)."""
++            if not hostname:
++                return True
++
++            # Check for localhost name
++            if hostname.lower() == 'localhost':
++                return True
++
++            # Check for *.internal domains
++            if hostname.lower().endswith('.internal'):
++                return True
++
++            # Try to parse as IP address
++            try:
++                ip = ipaddress.ip_address(hostname)
++                # Check for loopback (127.0.0.0/8)
++                if ip.is_loopback:
++                    return True
++                # Check for private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
++                if ip.is_private:
++                    return True
++                # Check for link-local (169.254.0.0/16)
++                if ip.is_link_local:
++                    return True
++                return False
++            except ValueError:
++                # Not an IP address, check by hostname resolution
++                pass
++
++            # If hostname is not an IP, try to resolve it and check the resolved IP
++            try:
++                resolved_ip = socket.gethostbyname(hostname)
++                ip = ipaddress.ip_address(resolved_ip)
++                if ip.is_loopback or ip.is_private or ip.is_link_local:
++                    return True
++            except (socket.gaierror, ValueError):
++                # If resolution fails, allow the attempt (will fail naturally)
++                pass
++
++            return False
++
++        # Parse the URL to get the hostname
++        parsed = urlparse(url)
++        hostname = parsed.hostname
++
++        # Check if the host is blocked
++        if is_blocked_host(hostname):
++            raise BlockedHostError('Host "%s" is not publicly reachable' % hostname)
++
++        # Perform the fetch with a custom handler for redirects
++        req = Request(url, headers={'User-Agent': self.user_agent})
++        try:
++            resp = urlopen(req, timeout=self.timeout)
++            # After following redirects (which urlopen handles automatically),
++            # check the final hostname
++            final_hostname = urlparse(resp.geturl()).hostname
++            if is_blocked_host(final_hostname):
++                raise BlockedHostError('Redirect target host "%s" is not publicly reachable' % final_hostname)
++
++            # Get charset from response headers, default to UTF-8
++            charset = resp.headers.get_param('charset') or 'utf-8'
++            content = resp.read().decode(charset)
++            resp.close()
++            return content
++        except (HTTPError, URLError, socket.timeout, ssl.SSLError) as exc:
++            raise ProviderException('Error fetching "%s"' % url) from exc
