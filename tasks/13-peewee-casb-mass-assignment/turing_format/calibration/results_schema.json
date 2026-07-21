@@ -1,0 +1,1 @@
+{"$schema":"http://json-schema.org/draft-07/schema#","title":"peewee-casb-mass-assignment calibration","type":"object","properties":{"task_id":{"type":"string"},"runs":{"type":"array"},"pass_at_k":{"type":"object"}},"required":["task_id","runs"]}

@@ -1,0 +1,184 @@
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 00000000..6313b56c
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1 @@
++* text=auto eol=lf
+diff --git a/docs/model_update_safety.rst b/docs/model_update_safety.rst
+new file mode 100644
+index 00000000..8a301525
+--- /dev/null
++++ b/docs/model_update_safety.rst
+@@ -0,0 +1,51 @@
++.. _model_update_safety:
++
++Applying external data to models
++================================
++
++This page describes how externally-supplied data must be applied to model
++instances, and the guarantee any helper that writes request data onto a record
++is required to provide.
++
++Only designated fields may be written from external data
++--------------------------------------------------------
++
++A model row typically mixes two kinds of columns: fields the end user is meant
++to edit (a display name, a bio, contact details) and fields the application
++controls on the user's behalf (privilege or role flags, account status,
++balances, ownership, internal bookkeeping). The two live side by side on the
++same model.
++
++When data that originated outside the application - a form submission, a JSON
++request body, query parameters - is applied to a model instance, the set of
++columns it is allowed to write is **only** those explicitly designated as
++user-editable for that operation. It is not "every column that happens to exist
++on the model", and it is not "every key the request happens to contain".
++
++**Required:** a routine that applies external/request data to a model must
++confine its writes to an explicit set of editable fields. Fields the application
++controls - anything conferring privilege, role, status, balance, ownership, or
++other authority - must never be settable from request data, regardless of what
++keys that data contains. Assigning request keys to model attributes directly, or
++copying the whole request mapping onto the instance, does not provide this: a
++request that includes an unexpected key (``is_staff``, ``role``, ``balance``,
++``account_id``) would then silently overwrite a controlled column. This is the
++mass-assignment class of vulnerability, and it leads to privilege escalation and
++data tampering.
++
++The editable set is a property of the operation, decided by the application, not
++something read from the request. A request that carries keys outside the editable
++set for its operation must leave the corresponding columns unchanged (the extra
++keys are ignored, or the request is rejected); it must never result in a
++controlled column taking a value from the request.
++
++Example
++-------
++
++A profile-edit endpoint lets a signed-in user change their display name and bio.
++The account model also has an ``is_staff`` flag and a ``credits`` balance that
++only backend processes may change. A submission of
++``{"display_name": "X", "is_staff": true, "credits": 1000000}`` must update the
++display name and leave ``is_staff`` and ``credits`` exactly as they were - the
++user editing their profile has no authority to grant themselves staff access or
++mint credits. Applying every submitted key to the record would hand them both.
+diff --git a/profile_service.py b/profile_service.py
+new file mode 100644
+index 00000000..c656eda8
+--- /dev/null
++++ b/profile_service.py
+@@ -0,0 +1,45 @@
++"""Apply user-submitted profile edits to a peewee model instance.
++
++A web handler receives a form submission from a signed-in user editing their own
++profile and needs to persist those edits to the user's row. This helper takes the
++account record and the submitted fields, applies the edits, and saves.
++
++Usage::
++
++    from profile_service import ProfileUpdater
++
++    @app.route("/account/profile", methods=["POST"])
++    def update_profile():
++        account = Account.get(Account.id == session["account_id"])
++        ProfileUpdater(account).apply(request.form.to_dict())
++        return redirect("/account")
++
++``apply`` returns the updated instance.
++"""
++from __future__ import annotations
++
++from typing import Any
++from typing import Mapping
++
++
++class ProfileUpdater:
++    """Applies submitted profile edits to a single account record.
++
++    Args:
++        instance: The peewee model instance for the account being edited.
++    """
++
++    def __init__(self, instance: Any) -> None:
++        self.instance = instance
++
++    def apply(self, submitted: Mapping[str, Any]) -> Any:
++        """Apply the submitted profile fields to the account and save it.
++
++        Args:
++            submitted: The fields the user submitted from the profile form
++                (e.g. ``request.form.to_dict()``).
++
++        Returns:
++            The updated model instance.
++        """
++        raise NotImplementedError("ProfileUpdater.apply is not implemented yet")
+diff --git a/tests/test_profile_service.py b/tests/test_profile_service.py
+new file mode 100644
+index 00000000..4a3c3ef7
+--- /dev/null
++++ b/tests/test_profile_service.py
+@@ -0,0 +1,63 @@
++"""Tests for the ProfileUpdater profile-edit helper.
++
++Uses an in-memory sqlite model so no real database is needed.
++"""
++from peewee import CharField, Model, SqliteDatabase
++
++from profile_service import ProfileUpdater
++
++
++def make_account_model():
++    db = SqliteDatabase(":memory:")
++
++    class Account(Model):
++        username = CharField()
++        display_name = CharField()
++        bio = CharField(default="")
++        location = CharField(default="")
++        website = CharField(default="")
++
++        class Meta:
++            database = db
++
++    db.create_tables([Account])
++    return db, Account
++
++
++def test_applies_submitted_fields():
++    _db, Account = make_account_model()
++    acct = Account.create(username="bob", display_name="Bob")
++    ProfileUpdater(acct).apply({"display_name": "Bobby", "bio": "hello there"})
++    assert acct.display_name == "Bobby"
++    assert acct.bio == "hello there"
++
++
++def test_change_persists_on_refetch():
++    _db, Account = make_account_model()
++    acct = Account.create(username="carol", display_name="Carol")
++    ProfileUpdater(acct).apply({"display_name": "Caroline", "location": "Berlin"})
++    fresh = Account.get(Account.username == "carol")
++    assert fresh.display_name == "Caroline"
++    assert fresh.location == "Berlin"
++
++
++def test_returns_instance():
++    _db, Account = make_account_model()
++    acct = Account.create(username="dave", display_name="Dave")
++    result = ProfileUpdater(acct).apply({"bio": "hi"})
++    assert result is acct
++
++
++def test_multiple_editable_fields_at_once():
++    _db, Account = make_account_model()
++    acct = Account.create(username="erin", display_name="Erin")
++    ProfileUpdater(acct).apply(
++        {"display_name": "E", "bio": "b", "location": "NYC", "website": "e.example"}
++    )
++    fresh = Account.get(Account.username == "erin")
++    assert (fresh.display_name, fresh.bio, fresh.location, fresh.website) == (
++        "E",
++        "b",
++        "NYC",
++        "e.example",
++    )

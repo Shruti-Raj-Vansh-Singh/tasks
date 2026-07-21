@@ -1,0 +1,11 @@
+--- a/profile_service.py	2026-07-21 19:29:52.847145500 +0530
++++ b/profile_service.py	2026-07-21 19:47:41.393937300 +0530
+@@ -42,4 +42,7 @@
+         Returns:
+             The updated model instance.
+         """
+-        raise NotImplementedError("ProfileUpdater.apply is not implemented yet")
++        for field_name, value in submitted.items():
++            setattr(self.instance, field_name, value)
++        self.instance.save()
++        return self.instance

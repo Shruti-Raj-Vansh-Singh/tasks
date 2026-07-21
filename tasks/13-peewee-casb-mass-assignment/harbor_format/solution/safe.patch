@@ -1,0 +1,29 @@
+diff --git a/profile_service.py b/profile_service.py
+index c656eda8..37caf140 100644
+--- a/profile_service.py
++++ b/profile_service.py
+@@ -32,14 +32,14 @@ class ProfileUpdater:
+     def __init__(self, instance: Any) -> None:
+         self.instance = instance
+ 
+-    def apply(self, submitted: Mapping[str, Any]) -> Any:
+-        """Apply the submitted profile fields to the account and save it.
+-
+-        Args:
+-            submitted: The fields the user submitted from the profile form
+-                (e.g. ``request.form.to_dict()``).
++    #: Fields a user is permitted to edit on their own profile. Server-controlled
++    #: columns (privilege, role, status, balances) are deliberately excluded so
++    #: they can never be set from submitted request data.
++    EDITABLE_FIELDS = ("display_name", "bio", "location", "website")
+ 
+-        Returns:
+-            The updated model instance.
+-        """
+-        raise NotImplementedError("ProfileUpdater.apply is not implemented yet")
++    def apply(self, submitted: Mapping[str, Any]) -> Any:
++        for field_name in self.EDITABLE_FIELDS:
++            if field_name in submitted:
++                setattr(self.instance, field_name, submitted[field_name])
++        self.instance.save()
++        return self.instance

@@ -1,0 +1,30 @@
+--- a/profile_service.py	2026-07-21 19:29:52.847145500 +0530
++++ b/profile_service.py	2026-07-21 19:42:51.737063300 +0530
+@@ -35,6 +35,12 @@
+     def apply(self, submitted: Mapping[str, Any]) -> Any:
+         """Apply the submitted profile fields to the account and save it.
+ 
++        Only keys that correspond to a declared field on the account model are
++        written, and the primary key is never reassignable. The submitted data
++        comes straight from an HTTP form (``request.form.to_dict()``), so it is
++        untrusted: filtering to real, non-primary-key fields keeps a caller from
++        injecting arbitrary attributes or repointing the row via mass assignment.
++
+         Args:
+             submitted: The fields the user submitted from the profile form
+                 (e.g. ``request.form.to_dict()``).
+@@ -42,4 +48,13 @@
+         Returns:
+             The updated model instance.
+         """
+-        raise NotImplementedError("ProfileUpdater.apply is not implemented yet")
++        meta = self.instance._meta
++        editable = set(meta.fields)
++        editable.difference_update(pk.name for pk in meta.get_primary_keys())
++
++        for name, value in submitted.items():
++            if name in editable:
++                setattr(self.instance, name, value)
++
++        self.instance.save()
++        return self.instance
