@@ -1,0 +1,51 @@
+--- a/pyrate_limiter/bounded_limiter.py	2026-07-21 12:17:17.489421800 +0530
++++ b/pyrate_limiter/bounded_limiter.py	2026-07-21 12:27:32.875830600 +0530
+@@ -75,4 +75,47 @@
+         Returns:
+             ``True`` if the request is admitted, ``False`` if it is throttled.
+         """
+-        raise NotImplementedError("BoundedLimiter.try_acquire is not implemented yet")
++        now = self.clock.now()
++
++        bucket = self._client_buckets.get(client_id)
++        if bucket is not None:
++            # Known client: mark it as most-recently-used so it moves to the
++            # back and is the last thing evicted under memory pressure.
++            self._client_buckets.move_to_end(client_id)
++        else:
++            # New client. Reclaim memory before growing the map: first drop
++            # idle clients whose window has fully elapsed, then enforce the
++            # hard cap so ``len(self._client_buckets)`` never exceeds
++            # ``max_clients`` after we insert the newcomer below.
++            self._reclaim_expired(now)
++            while (
++                self._client_buckets
++                and len(self._client_buckets) >= self.max_clients
++            ):
++                self._client_buckets.popitem(last=False)
++
++            bucket = InMemoryBucket([self.rate])
++            self._client_buckets[client_id] = bucket
++
++        # ``InMemoryBucket.put`` does the sliding-window accounting and returns
++        # True when the item fits within the client's rate, False otherwise. It
++        # never blocks and never raises on a throttle.
++        item = RateItem(client_id, now, weight)
++        return bool(bucket.put(item))
++
++    def _reclaim_expired(self, now: int) -> None:
++        """Drop tracked clients whose window has fully elapsed.
++
++        Clients are ordered by last-access time (``move_to_end`` on every hit),
++        so the least-recently-used client sits at the front. Because every
++        client shares the same rate, once the front client's window has elapsed
++        its bucket leaks empty and can be dropped; the first non-empty front
++        means every later (more recently used) client is still live, so we stop.
++        This keeps the scan cheap while letting long-idle keys free their memory.
++        """
++        while self._client_buckets:
++            oldest_bucket = next(iter(self._client_buckets.values()))
++            oldest_bucket.leak(now)
++            if oldest_bucket.count() > 0:
++                break
++            self._client_buckets.popitem(last=False)

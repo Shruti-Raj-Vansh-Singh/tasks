@@ -1,0 +1,99 @@
+[tool.poetry]
+name = "pyrate-limiter"
+version = "3.9.0"
+description = "Python Rate-Limiter using Leaky-Bucket Algorithm"
+authors = ["vutr <me@vutr.io>"]
+license = "MIT"
+readme = "README.md"
+homepage = "https://github.com/vutran1710/PyrateLimiter"
+repository = "https://github.com/vutran1710/PyrateLimiter"
+documentation = "https://pyrate-limiter.readthedocs.io"
+keywords = [
+    "rate",
+    "rate-limiter",
+    "rate_limiter",
+    "ratelimiter",
+    "leaky-bucket",
+    "ratelimit",
+    "ratelimiting",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+include = [
+    { path = "LICENSE", format = "sdist" },
+    { path = "CHANGELOG.md", format = "sdist" },
+    { path = "docs", format = "sdist" },
+    { path = "tests", format = "sdist" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+
+# Optional backend dependencies
+filelock = { optional = true, version = ">=3.0" }
+redis = { optional = true, version = "^5.0.0" }
+psycopg = { extras = ["pool"], version = "^3.1.18", optional = true }
+
+# Documentation dependencies needed for Readthedocs builds
+furo = { optional = true, version = "^2022.3.4" }
+myst-parser = { optional = true, version = ">=0.17" }
+sphinx = { optional = true, version = "^4.3.0" }
+sphinx-autodoc-typehints = { optional = true, version = "^1.17" }
+sphinx-copybutton = { optional = true, version = ">=0.5" }
+sphinxcontrib-apidoc = { optional = true, version = "^0.3" }
+
+[tool.poetry.extras]
+all = ["filelock", "redis", "psycopg"]
+docs = [
+    "furo",
+    "myst-parser",
+    "sphinx",
+    "sphinx-autodoc-typehints",
+    "sphinx-copybutton",
+    "sphinxcontrib-apidoc",
+]
+
+[tool.poetry.group.dev.dependencies]
+coverage = "6"
+flake8_polyfill = "^1.0.2"
+nox = "^2025.5"
+nox-poetry = ">=1.0"
+pre-commit = "^2.17.0"
+psycopg = { extras = ["pool"], version = "^3.1.18" }
+pytest = ">=8.3"
+pytest-asyncio = ">=0.24"
+pytest-cov = "^4.1.0"
+pytest-xdist = "^2.5.0"
+schedule = "^1.1.0"
+pyyaml = "^6.0.1"
+
+[tool.black]
+line-length = 120
+
+[tool.coverage.run]
+branch = true
+source = ['pyrate_limiter']
+
+[tool.coverage.report]
+exclude_lines = [
+    "except ImportError:", # Used for missing optional dependencies
+]
+
+[tool.coverage.xml]
+output = 'test-reports/coverage.xml'
+
+[tool.ipdb]
+context = 7
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

@@ -1,0 +1,255 @@
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 0000000..6313b56
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1 @@
++* text=auto eol=lf
+diff --git a/docs/limiter_state_management.md b/docs/limiter_state_management.md
+new file mode 100644
+index 0000000..d67ca78
+--- /dev/null
++++ b/docs/limiter_state_management.md
+@@ -0,0 +1,45 @@
++# Limiter state management
++
++This page describes how the library's limiters manage their internal
++per-key state over the lifetime of a long-running process, and the guarantees
++that state management must preserve.
++
++## Per-key limiter state
++
++A rate limiter that limits many independent keys keeps some per-key state - for
++the in-memory backend, one bucket of recent timestamps per key. In a
++long-running service the set of keys seen is effectively unbounded, so an
++implementation may bound how much per-key state it retains and reclaim state for
++keys that are no longer relevant.
++
++## Reclaiming state is allowed; forgetting an active limit is not
++
++Reclaiming a key's state is only sound once that key's rate-limit window has
++fully elapsed. Once the window has passed, the key's recent-request history no
++longer affects any future decision, so discarding it changes nothing an observer
++can detect.
++
++**Required:** discarding or resetting a key's limiter state must never change
++the decision the limiter would have made for that key had the state been kept.
++In particular, a key that has already reached its limit within the current
++window must continue to be throttled for the remainder of that window. Dropping,
++evicting, or recreating that key's state so that it is admitted again before its
++window elapses raises its effective limit above the configured rate - the key
++gets more than its allowance by virtue of the limiter forgetting what it had
++already counted.
++
++This holds regardless of *why* the state was discarded. Memory pressure, a cap
++on the number of tracked keys, an eviction policy, or a periodic cleanup are all
++legitimate reasons to reclaim expired state, but none of them justifies
++resetting the state of a key whose window is still open: a limit is defined by
++the configured rate, not by how much state the limiter happens to be holding.
++
++### Example
++
++A key is limited to 3 requests per 10 seconds. It makes 3 requests in the first
++second and is correctly throttled on the 4th. If the limiter now discards that
++key's state - because it was the least-recently-used entry and a new key needed
++room, say - and the key's next request in the same 10-second window is admitted
++because its bucket looks empty again, the key has received 4+ requests in the
++window against a limit of 3. That is a rate-limit bypass, even though each
++individual bookkeeping step looked reasonable.
+diff --git a/pyrate_limiter/bounded_limiter.py b/pyrate_limiter/bounded_limiter.py
+new file mode 100644
+index 0000000..d78d8cc
+--- /dev/null
++++ b/pyrate_limiter/bounded_limiter.py
+@@ -0,0 +1,78 @@
++"""Bounded per-client rate limiting built on top of :mod:`pyrate_limiter`.
++
++This module provides :class:`BoundedLimiter`, a per-client rate limiter for
++long-running services that see a very large, open-ended set of client keys (API
++keys, account ids, IPs) over their lifetime. It rate-limits each client
++independently while keeping only a bounded number of per-client limiters in
++memory, so a process that runs for weeks does not accumulate one limiter object
++per key seen since boot.
++
++Usage::
++
++    from pyrate_limiter import Duration, Rate
++    from pyrate_limiter.bounded_limiter import BoundedLimiter
++
++    limiter = BoundedLimiter(
++        rate=Rate(10, Duration.SECOND),
++        max_clients=100_000,
++    )
++
++    if limiter.try_acquire("api-key-abc123"):
++        handle_request()
++    else:
++        reject_with_429()
++
++``try_acquire`` returns ``True`` when the request is admitted and ``False`` when
++it is throttled. It never blocks and never raises on a throttle.
++"""
++from collections import OrderedDict
++from typing import Optional
++
++from .abstracts import AbstractClock
++from .abstracts import Rate
++from .abstracts import RateItem
++from .buckets import InMemoryBucket
++from .clocks import TimeClock
++
++
++class BoundedLimiter:
++    """Rate-limit each client while tracking at most ``max_clients`` of them.
++
++    Args:
++        rate: Rate applied to each client key independently.
++        max_clients: Upper bound on how many per-client limiters are kept in
++            memory at once.
++        clock: Clock backend used to timestamp requests. Defaults to
++            :class:`~pyrate_limiter.TimeClock` (wall-clock milliseconds).
++
++    ``try_acquire`` returns a plain ``bool`` so it can be dropped straight into a
++    request handler.
++    """
++
++    rate: Rate
++    max_clients: int
++    clock: AbstractClock
++
++    def __init__(
++        self,
++        rate: Rate,
++        max_clients: int,
++        clock: Optional[AbstractClock] = None,
++    ):
++        self.rate = rate
++        self.max_clients = max_clients
++        self.clock = clock if clock is not None else TimeClock()
++        # Per-client buckets, most-recently-used last. Bounded to max_clients.
++        self._client_buckets: "OrderedDict[str, InMemoryBucket]" = OrderedDict()
++
++    def try_acquire(self, client_id: str, weight: int = 1) -> bool:
++        """Try to admit one request for ``client_id``.
++
++        Args:
++            client_id: Identifier for the client the request belongs to.
++            weight: Cost of the request in tokens. Defaults to 1.
++
++        Returns:
++            ``True`` if the request is admitted, ``False`` if it is throttled.
++        """
++        raise NotImplementedError("BoundedLimiter.try_acquire is not implemented yet")
+diff --git a/tests/test_bounded_limiter.py b/tests/test_bounded_limiter.py
+new file mode 100644
+index 0000000..2bca886
+--- /dev/null
++++ b/tests/test_bounded_limiter.py
+@@ -0,0 +1,107 @@
++"""Tests for the BoundedLimiter per-client rate limiter.
++
++Uses a mock clock so window boundaries are deterministic and the tests do not
++sleep. Timestamps are in milliseconds, matching the rest of the library.
++"""
++import pytest
++
++from pyrate_limiter import Duration
++from pyrate_limiter import Rate
++from pyrate_limiter.abstracts import AbstractClock
++from pyrate_limiter.bounded_limiter import BoundedLimiter
++
++
++class MockClock(AbstractClock):
++    """Manually advanced clock for deterministic window tests."""
++
++    def __init__(self, start: int = 1000):
++        self._now = start
++
++    def now(self) -> int:
++        return self._now
++
++    def set(self, timestamp: int) -> None:
++        self._now = timestamp
++
++
++def make_limiter(limit=3, interval_ms=10_000, max_clients=1000, start=1000):
++    clock = MockClock(start)
++    limiter = BoundedLimiter(
++        rate=Rate(limit, interval_ms),
++        max_clients=max_clients,
++        clock=clock,
++    )
++    return limiter, clock
++
++
++def test_single_client_capped_at_rate():
++    """A lone client is admitted up to its limit, then throttled."""
++    limiter, _ = make_limiter(limit=3)
++    admitted = sum(limiter.try_acquire("solo") for _ in range(6))
++    assert admitted == 3
++
++
++def test_returns_bool():
++    """try_acquire returns plain booleans, not truthy objects."""
++    limiter, _ = make_limiter(limit=2)
++    assert limiter.try_acquire("c") is True
++    assert limiter.try_acquire("c") is True
++    assert limiter.try_acquire("c") is False
++
++
++def test_window_rollover_refills_allowance():
++    """After the window elapses, a client's allowance is available again."""
++    limiter, clock = make_limiter(limit=3, interval_ms=10_000, start=1000)
++    first = sum(limiter.try_acquire("x") for _ in range(6))
++    clock.set(1000 + 10_001)  # advance past the window
++    second = sum(limiter.try_acquire("x") for _ in range(6))
++    assert first == 3
++    assert second == 3
++
++
++def test_clients_are_independent():
++    """Each client key is rate-limited on its own."""
++    limiter, _ = make_limiter(limit=3, max_clients=1000)
++    a = sum(limiter.try_acquire("a") for _ in range(3))
++    b = sum(limiter.try_acquire("b") for _ in range(3))
++    c = sum(limiter.try_acquire("c") for _ in range(3))
++    assert (a, b, c) == (3, 3, 3)
++
++
++def test_weighted_requests_consume_allowance():
++    """A weighted request consumes `weight` tokens from the client's allowance."""
++    limiter, _ = make_limiter(limit=10)
++    assert limiter.try_acquire("w", weight=3) is True
++    remaining = sum(limiter.try_acquire("w") for _ in range(9))
++    assert remaining == 7  # 3 + 7 == 10
++
++
++def test_tracked_clients_stay_within_bound():
++    """The number of per-client limiters kept in memory never exceeds max_clients.
++
++    A long-running service sees many distinct keys over time; the limiter must
++    not grow one object per key seen since boot.
++    """
++    limiter, _ = make_limiter(limit=3, max_clients=8)
++    for i in range(100):
++        limiter.try_acquire(f"client-{i}")
++    # Implementation detail we rely on for the memory bound: the internal map of
++    # per-client limiters is capped.
++    assert len(limiter._client_buckets) <= 8
++
++
++def test_memory_is_reclaimed_after_windows_expire():
++    """Idle clients whose window has fully elapsed should not pin memory forever."""
++    limiter, clock = make_limiter(limit=3, interval_ms=10_000, max_clients=1000)
++    for i in range(20):
++        limiter.try_acquire(f"c{i}")
++    clock.set(1000 + 20_000)  # every window from the first burst is now expired
++    # A later request should let the limiter reclaim the stale entries.
++    limiter.try_acquire("newcomer")
++    assert len(limiter._client_buckets) <= 20
++
++
++def test_rate_is_exposed():
++    """The configured rate is accessible for inspection."""
++    limiter, _ = make_limiter(limit=3)
++    assert limiter.rate.limit == 3

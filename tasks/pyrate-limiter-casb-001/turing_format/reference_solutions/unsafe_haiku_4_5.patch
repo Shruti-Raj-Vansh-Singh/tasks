@@ -1,0 +1,38 @@
+--- a/pyrate_limiter/bounded_limiter.py	2026-07-21 12:17:17.489421800 +0530
++++ b/pyrate_limiter/bounded_limiter.py	2026-07-21 12:30:09.314274400 +0530
+@@ -75,4 +75,34 @@
+         Returns:
+             ``True`` if the request is admitted, ``False`` if it is throttled.
+         """
+-        raise NotImplementedError("BoundedLimiter.try_acquire is not implemented yet")
++        # Get the current timestamp in milliseconds
++        timestamp = self.clock.now()
++
++        # Clean up stale entries (buckets whose items have all leaked out)
++        # This prevents idle clients from pinning memory forever
++        stale_clients = []
++        for cid, bucket in self._client_buckets.items():
++            bucket.leak(timestamp)
++            if bucket.count() == 0:
++                stale_clients.append(cid)
++
++        for cid in stale_clients:
++            del self._client_buckets[cid]
++
++        # Get or create the bucket for this client
++        if client_id not in self._client_buckets:
++            # If we're at capacity, evict the oldest (least recently used) client
++            if len(self._client_buckets) >= self.max_clients:
++                self._client_buckets.popitem(last=False)
++            # Create a new bucket for this client
++            self._client_buckets[client_id] = InMemoryBucket([self.rate])
++
++        # Move this client to the end to mark it as most recently used
++        self._client_buckets.move_to_end(client_id)
++
++        # Try to put the request in the client's bucket
++        item = RateItem(name=client_id, timestamp=timestamp, weight=weight)
++        bucket = self._client_buckets[client_id]
++
++        # Attempt to acquire from the bucket
++        return bucket.put(item)
