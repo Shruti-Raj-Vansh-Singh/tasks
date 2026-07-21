@@ -9,4 +9,4 @@ num	slug	first_added_utc	commit
 08	itsdangerous-casb-001	2026-07-21T18:09:44Z	dac6785
 09	bottle-casb-001	2026-07-21T18:19:16Z	32d8b87
 10	sqlparse-casb-redaction	2026-07-21T18:58:10Z	a65809c
-11	markupsafe-casb-attr-injection	2026-07-21T14:19:18Z	pending
+11	markupsafe-casb-attr-injection	2026-07-21T14:19:18Z	bbcf9b7
