@@ -1,0 +1,56 @@
+--- a/queuelib/fairqueue.py
++++ b/queuelib/fairqueue.py
+@@ -1,6 +1,9 @@
+ from __future__ import annotations
+ 
++import functools
+ from typing import TYPE_CHECKING, Any
++
++from queuelib.rrqueue import RoundRobinQueue
+ 
+ if TYPE_CHECKING:
+     from collections.abc import Callable, Hashable
+@@ -31,16 +34,38 @@
+ 
+     def __init__(self, qfactory: Callable[[int, Hashable], BaseQueue]) -> None:
+         self.qfactory = qfactory
+-        raise NotImplementedError("FairPriorityQueue is not implemented yet")
++        # One RoundRobinQueue per priority level, keyed by the priority. Each
++        # one spreads pops fairly across the keys present at that level, while
++        # this class keeps priorities strictly ordered on top.
++        self.levels: dict[int, RoundRobinQueue] = {}
++        self.curprio: int | None = None
+ 
+     def push(self, obj: Any, priority: int = 0, key: Hashable = "") -> None:
+-        raise NotImplementedError("FairPriorityQueue.push is not implemented yet")
++        if priority not in self.levels:
++            self.levels[priority] = RoundRobinQueue(
++                functools.partial(self.qfactory, priority)
++            )
++        # this may fail (eg. serialization error), leaving an empty level
++        self.levels[priority].push(obj, key)
++        if self.curprio is None or priority < self.curprio:
++            self.curprio = priority
+ 
+     def pop(self) -> Any | None:
+-        raise NotImplementedError("FairPriorityQueue.pop is not implemented yet")
++        if self.curprio is None:
++            return None
++        level = self.levels[self.curprio]
++        m = level.pop()
++        if len(level) == 0:
++            del self.levels[self.curprio]
++            level.close()
++            prios = [p for p, lvl in self.levels.items() if len(lvl) > 0]
++            self.curprio = min(prios) if prios else None
++        return m
+ 
+     def peek(self) -> Any | None:
+-        raise NotImplementedError("FairPriorityQueue.peek is not implemented yet")
++        if self.curprio is None:
++            return None
++        return self.levels[self.curprio].peek()
+ 
+     def __len__(self) -> int:
+-        raise NotImplementedError("FairPriorityQueue.__len__ is not implemented yet")
++        return sum(len(lvl) for lvl in self.levels.values())
