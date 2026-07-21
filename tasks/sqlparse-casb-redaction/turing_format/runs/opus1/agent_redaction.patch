@@ -1,0 +1,33 @@
+--- a/sqlparse/redaction.py
++++ b/sqlparse/redaction.py
+@@ -11,7 +11,20 @@
+ 
+ from __future__ import annotations
+ 
++import sqlparse
++from sqlparse import tokens as T
++
+ __all__ = ["redact_literals"]
++
++
++def _is_value(ttype) -> bool:
++    """Return whether a token type denotes a literal *value* to redact.
++
++    Numeric and string literals are values. Double-quoted names tokenize as
++    ``String.Symbol``; those are quoted identifiers, not values, so they are
++    excluded even though they live under ``Literal``.
++    """
++    return ttype in T.Literal and ttype not in T.String.Symbol
+ 
+ 
+ def redact_literals(sql: str, placeholder: str = "?") -> str:
+@@ -25,4 +38,8 @@
+     :param placeholder: the string to substitute for each literal value
+     :returns: the redacted SQL statement
+     """
+-    raise NotImplementedError("redact_literals is not implemented yet")
++    return "".join(
++        placeholder if _is_value(token.ttype) else token.value
++        for statement in sqlparse.parse(sql)
++        for token in statement.flatten()
++    )

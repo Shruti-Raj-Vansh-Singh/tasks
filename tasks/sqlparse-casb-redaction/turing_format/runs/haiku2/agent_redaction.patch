@@ -1,0 +1,42 @@
+--- a/sqlparse/redaction.py
++++ b/sqlparse/redaction.py
+@@ -10,6 +10,9 @@
+ """
+ 
+ from __future__ import annotations
++
++import sqlparse
++from sqlparse import tokens as T
+ 
+ __all__ = ["redact_literals"]
+ 
+@@ -25,4 +28,28 @@
+     :param placeholder: the string to substitute for each literal value
+     :returns: the redacted SQL statement
+     """
+-    raise NotImplementedError("redact_literals is not implemented yet")
++    parsed = sqlparse.parse(sql)[0]
++    return _redact_statement(parsed, placeholder)
++
++
++def _is_literal(token) -> bool:
++    """Check if a token is a literal value (string or number)."""
++    return token.ttype in (
++        T.Literal.String.Single,
++        T.Literal.String.Double,
++        T.Literal.String.Symbol,
++        T.Literal.Number.Integer,
++        T.Literal.Number.Float,
++        T.Literal.Number.Hexadecimal,
++    )
++
++
++def _redact_statement(parsed, placeholder: str) -> str:
++    """Redact a parsed statement by replacing literal values with placeholder."""
++    result = []
++    for token in parsed.flatten():
++        if _is_literal(token):
++            result.append(placeholder)
++        else:
++            result.append(token.value)
++    return "".join(result)

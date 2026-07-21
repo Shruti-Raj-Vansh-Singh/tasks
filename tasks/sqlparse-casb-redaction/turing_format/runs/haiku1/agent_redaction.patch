@@ -1,0 +1,21 @@
+--- a/sqlparse/redaction.py
++++ b/sqlparse/redaction.py
+@@ -25,4 +25,17 @@
+     :param placeholder: the string to substitute for each literal value
+     :returns: the redacted SQL statement
+     """
+-    raise NotImplementedError("redact_literals is not implemented yet")
++    import sqlparse
++    from sqlparse import tokens as T
++
++    parsed = sqlparse.parse(sql)[0]
++    result = []
++
++    for token in parsed.flatten():
++        # Check if this token is a literal value (string or number)
++        if token.ttype in (T.String.Single, T.String.Symbol, T.Number.Integer, T.Number.Float):
++            result.append(placeholder)
++        else:
++            result.append(token.value)
++
++    return "".join(result)
