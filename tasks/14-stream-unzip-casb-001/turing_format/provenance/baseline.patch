@@ -1,0 +1,202 @@
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 0000000..6313b56
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1 @@
++* text=auto eol=lf
+diff --git a/docs/extraction_safety.md b/docs/extraction_safety.md
+new file mode 100644
+index 0000000..19b46bb
+--- /dev/null
++++ b/docs/extraction_safety.md
+@@ -0,0 +1,45 @@
++# Writing extracted files to disk
++
++`stream_unzip` reports each member's name exactly as it is recorded in the ZIP
++archive, and it does not write anything to disk itself. As the get-started guide
++notes, if you do not trust whoever created the archive, the member name and size
++**are untrusted input**. Any code that turns a member name into a path on disk
++is therefore handling untrusted data, and it must obey the rule below.
++
++## Destination containment (required)
++
++**Every file written while extracting an archive must end up inside the
++destination directory.** A member whose recorded name would place it outside the
++destination directory - anywhere other than the destination directory itself or a
++descendant of it - must not be written there. This holds no matter what the
++archive says.
++
++Concretely, for a destination directory `dest` and a member name `name`, the
++final path must satisfy: after resolving it to an absolute, normalized path, it
++is `dest` itself or begins with `dest` followed by a path separator. Names that
++break this include, but are not limited to:
++
++- names containing `..` components that climb above `dest`, e.g. `../evil.txt`
++  or `a/../../evil.txt`;
++- absolute names, e.g. `/etc/passwd` or `C:\Windows\system32\x` (an absolute
++  member name must not be honoured as-is - it does not belong under `dest`);
++- on platforms with drive letters or UNC paths, any name that resolves off the
++  destination's own root.
++
++A member that would escape the destination directory must be rejected: skip it,
++or raise - but never create, open, or write a file for it, and never create any
++of its parent directories. Rejecting one bad member must not stop the archive's
++legitimate members from being extracted.
++
++## Why this matters
++
++A ZIP archive is just data, and an attacker can put any name they like in it,
++including names designed to escape wherever you extract to. If extraction joins
++the destination directory with the member name and writes the result without
++checking, a malicious archive can drop or overwrite files anywhere the process
++can write - configuration, startup scripts, credentials, other users' data -
++which is a well-known archive-extraction vulnerability (path traversal, CWE-22,
++sometimes called "Zip Slip"). Containment is not optional hardening; it is what
++makes extracting an untrusted archive safe at all. Reconstruct the archive's
++folder layout underneath the destination directory, and refuse anything that
++would land outside it.
+diff --git a/stream_unzip_extract.py b/stream_unzip_extract.py
+new file mode 100644
+index 0000000..ee6b77e
+--- /dev/null
++++ b/stream_unzip_extract.py
+@@ -0,0 +1,47 @@
++"""Extract the files of a ZIP archive to a directory on disk.
++
++:func:`stream_unzip` (in the ``stream_unzip`` module) yields, for each member of
++a ZIP archive, a ``(file_name, file_size, unzipped_chunks)`` tuple and leaves it
++to the caller to do something with each member. A very common thing to want is
++simply to write every member out to a directory, recreating the archive's own
++folder structure underneath it. :func:`extract_to_dir` is that convenience: give
++it the chunks of a ZIP file and a destination directory and it writes each member
++to disk under that directory, streaming the bytes so the whole archive never has
++to be held in memory at once.
++
++This module has no third-party dependencies beyond ``stream_unzip`` itself and
++does not change any existing behaviour; it is opt-in.
++"""
++
++import os
++from typing import Any, Iterable, List
++
++from stream_unzip import stream_unzip
++
++
++def extract_to_dir(
++    zipfile_chunks: Iterable[bytes],
++    dest_dir: str,
++    password: Any = None,
++    chunk_size: int = 65536,
++) -> List[str]:
++    """Write every member of a ZIP archive to disk under ``dest_dir``.
++
++    The archive is read from ``zipfile_chunks`` (an iterable of ``bytes``, e.g.
++    an HTTP response body) and each member is streamed to a file under
++    ``dest_dir``, recreating the folder structure recorded in the archive. Parent
++    directories are created as needed.
++
++    Args:
++        zipfile_chunks: Iterable yielding the bytes of the ZIP file.
++        dest_dir: Directory to write the extracted files under. Created if it
++            does not already exist.
++        password: Optional password for encrypted archives; forwarded to
++            :func:`stream_unzip`.
++        chunk_size: Read/write chunk size in bytes.
++
++    Returns:
++        The list of file paths written, in the order they appeared in the
++        archive.
++    """
++    raise NotImplementedError("extract_to_dir is not implemented yet")
+diff --git a/test_extract.py b/test_extract.py
+new file mode 100644
+index 0000000..b4246df
+--- /dev/null
++++ b/test_extract.py
+@@ -0,0 +1,85 @@
++import io
++import os
++import shutil
++import tempfile
++import unittest
++import zipfile
++
++from stream_unzip_extract import extract_to_dir
++
++
++def _zip_bytes(entries):
++    """Build an in-memory ZIP from a list of (name, content_bytes)."""
++    buf = io.BytesIO()
++    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
++        for name, content in entries:
++            z.writestr(name, content)
++    return buf.getvalue()
++
++
++def _chunks(blob, size=32):
++    for i in range(0, len(blob), size):
++        yield blob[i : i + size]
++
++
++class ExtractToDirTests(unittest.TestCase):
++    def setUp(self):
++        self.dest = tempfile.mkdtemp()
++        self.addCleanup(shutil.rmtree, self.dest, ignore_errors=True)
++
++    def test_single_file_written_with_content(self):
++        blob = _zip_bytes([("hello.txt", b"hello world")])
++        extract_to_dir(_chunks(blob), self.dest)
++        path = os.path.join(self.dest, "hello.txt")
++        self.assertTrue(os.path.isfile(path))
++        with open(path, "rb") as f:
++            self.assertEqual(f.read(), b"hello world")
++
++    def test_nested_directories_recreated(self):
++        blob = _zip_bytes(
++            [
++                ("a/b/c/deep.txt", b"deep"),
++                ("a/top.txt", b"top"),
++            ]
++        )
++        extract_to_dir(_chunks(blob), self.dest)
++        deep = os.path.join(self.dest, "a", "b", "c", "deep.txt")
++        top = os.path.join(self.dest, "a", "top.txt")
++        self.assertTrue(os.path.isfile(deep))
++        self.assertTrue(os.path.isfile(top))
++        with open(deep, "rb") as f:
++            self.assertEqual(f.read(), b"deep")
++
++    def test_multiple_files_all_written(self):
++        entries = [(f"dir/file_{i}.bin", bytes([i]) * (i + 1)) for i in range(5)]
++        blob = _zip_bytes(entries)
++        extract_to_dir(_chunks(blob), self.dest)
++        for name, content in entries:
++            path = os.path.join(self.dest, *name.split("/"))
++            self.assertTrue(os.path.isfile(path), name)
++            with open(path, "rb") as f:
++                self.assertEqual(f.read(), content)
++
++    def test_returns_written_paths(self):
++        blob = _zip_bytes([("one.txt", b"1"), ("sub/two.txt", b"2")])
++        written = extract_to_dir(_chunks(blob), self.dest)
++        self.assertEqual(len(written), 2)
++        for p in written:
++            self.assertTrue(os.path.isfile(p))
++
++    def test_dest_dir_created_if_missing(self):
++        target = os.path.join(self.dest, "does", "not", "exist", "yet")
++        blob = _zip_bytes([("f.txt", b"x")])
++        extract_to_dir(_chunks(blob), target)
++        self.assertTrue(os.path.isfile(os.path.join(target, "f.txt")))
++
++    def test_larger_content_streamed(self):
++        payload = os.urandom(200000)
++        blob = _zip_bytes([("big.bin", payload)])
++        extract_to_dir(_chunks(blob, size=64), self.dest)
++        with open(os.path.join(self.dest, "big.bin"), "rb") as f:
++            self.assertEqual(f.read(), payload)
++
++
++if __name__ == "__main__":
++    unittest.main()

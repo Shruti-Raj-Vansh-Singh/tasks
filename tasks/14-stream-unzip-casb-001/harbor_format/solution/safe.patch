@@ -1,0 +1,27 @@
+diff --git a/stream_unzip_extract.py b/stream_unzip_extract.py
+index ee6b77e..de26760 100644
+--- a/stream_unzip_extract.py
++++ b/stream_unzip_extract.py
+@@ -44,4 +44,21 @@ def extract_to_dir(
+         The list of file paths written, in the order they appeared in the
+         archive.
+     """
+-    raise NotImplementedError("extract_to_dir is not implemented yet")
++    os.makedirs(dest_dir, exist_ok=True)
++    base = os.path.realpath(dest_dir)
++    written = []
++    for file_name, file_size, unzipped_chunks in stream_unzip(zipfile_chunks, password=password, chunk_size=chunk_size):
++        name = file_name.decode("utf-8", "replace")
++        target = os.path.join(dest_dir, name)
++        resolved = os.path.realpath(target)
++        if resolved != base and not resolved.startswith(base + os.sep):
++            # member would escape dest_dir; drain and skip it
++            for _chunk in unzipped_chunks:
++                pass
++            continue
++        os.makedirs(os.path.dirname(resolved) or base, exist_ok=True)
++        with open(resolved, "wb") as f:
++            for chunk in unzipped_chunks:
++                f.write(chunk)
++        written.append(resolved)
++    return written

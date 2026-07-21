@@ -12,3 +12,4 @@ num	slug	first_added_utc	commit
 11	markupsafe-casb-attr-injection	2026-07-21T14:19:18Z	bbcf9b7
 12	kombu-casb-001	2026-07-21T14:42:57Z	812d5b4
 13	peewee-casb-mass-assignment	2026-07-21T19:35:00Z	pending
+14	stream-unzip-casb-001	pending	pending
