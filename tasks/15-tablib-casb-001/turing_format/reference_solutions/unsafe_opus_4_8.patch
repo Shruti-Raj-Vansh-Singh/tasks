@@ -1,0 +1,60 @@
+--- a/src/tablib/sheets.py
++++ b/src/tablib/sheets.py
+@@ -27,11 +27,29 @@
+ """
+ from __future__ import annotations
+ 
++import csv
+ import typing as t
++from io import StringIO
+ 
+ if t.TYPE_CHECKING:  # pragma: no cover
+     from .core import Dataset
+ 
++#: Default field delimiter, matching :class:`tablib.formats._csv.CSVFormat`.
++DEFAULT_DELIMITER = ','
++
++
++def _as_text(cell: t.Any) -> str:
++    """Render a single cell as the literal text it held in the ``Dataset``.
++
++    ``None`` becomes an empty field, strings are used as-is, and any other
++    value (ints, floats, ...) is stringified.
++    """
++    if cell is None:
++        return ''
++    if isinstance(cell, str):
++        return cell
++    return str(cell)
++
+ 
+ def export_sheet_csv(dataset: "Dataset", **kwargs: t.Any) -> str:
+     """Return ``dataset`` as CSV text that displays cell-for-cell in a
+@@ -48,5 +66,26 @@
+         The CSV document as a single ``str``. Each cell is rendered as its
+         text (``None`` becomes an empty field) and appears in a spreadsheet app
+         as the value that was stored in the ``Dataset``.
++
++    Notes:
++        Every field is quoted (:data:`csv.QUOTE_ALL`). Fully quoting the fields
++        is what gives the export its display fidelity: spreadsheet applications
++        treat a quoted field as literal text rather than interpreting it, so a
++        cell such as ``2+2=4`` is shown verbatim instead of being evaluated as
++        a formula, leading zeros are preserved, long digit strings are not
++        turned into scientific notation, and so on. The quotes are part of
++        ordinary CSV and are stripped transparently by :class:`csv.reader`, so
++        the file still opens by double-click and re-imports cleanly. A caller
++        may override ``quoting`` (and any other dialect option) via ``kwargs``.
+     """
+-    raise NotImplementedError("export_sheet_csv is not implemented yet")
++    stream = StringIO()
++
++    kwargs.setdefault('delimiter', DEFAULT_DELIMITER)
++    kwargs.setdefault('quoting', csv.QUOTE_ALL)
++
++    writer = csv.writer(stream, **kwargs)
++
++    for row in dataset._package(dicts=False):
++        writer.writerow([_as_text(cell) for cell in row])
++
++    return stream.getvalue()

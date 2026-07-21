@@ -1,0 +1,27 @@
+--- a/src/tablib/sheets.py
++++ b/src/tablib/sheets.py
+@@ -49,4 +49,23 @@
+         text (``None`` becomes an empty field) and appears in a spreadsheet app
+         as the value that was stored in the ``Dataset``.
+     """
+-    raise NotImplementedError("export_sheet_csv is not implemented yet")
++    import csv
++    from io import StringIO
++
++    stream = StringIO()
++    writer = csv.writer(stream, **kwargs)
++
++    # Get the data from the dataset (headers first if present, then data rows)
++    rows = dataset._package(dicts=False)
++
++    for row in rows:
++        # Convert each cell to text: None -> '', other types -> stringified
++        converted_row = []
++        for cell in row:
++            if cell is None:
++                converted_row.append('')
++            else:
++                converted_row.append(str(cell))
++        writer.writerow(converted_row)
++
++    return stream.getvalue()
