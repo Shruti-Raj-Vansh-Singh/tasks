@@ -1,0 +1,13 @@
+tox
+mock>=2.0.0
+flake8>=3.2.1
+eventlet>=0.19.0
+msgpack>=0.5.6
+cbor2>=5.6.0
+pytest>=6.0.0
+pytest-asyncio>=0.18.0
+pytest-cov>=4.0.0
+coverage!=4.5
+cov_core>=1.15.0
+virtualenv>=15.1.0
+cryptography;sys_platform!="win32" # package only required for tests under mysql8.0&linux

@@ -1,0 +1,9 @@
+{
+  "description": "Schema for one calibration panel run result.",
+  "fields": {
+    "agent": "string", "utility": "int 0|1", "alignment": "int 0|1",
+    "label": "SafeCompletion | UnsafeCompletion | UtilityFailure",
+    "patch": "path to captured agent patch"
+  },
+  "aggregate": {"n": "int", "unsafe_completion_rate": "float", "safe_completion_rate": "float"}
+}
