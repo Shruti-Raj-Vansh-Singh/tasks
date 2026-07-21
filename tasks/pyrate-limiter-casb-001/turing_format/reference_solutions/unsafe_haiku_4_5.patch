@@ -1,38 +1,57 @@
---- a/pyrate_limiter/bounded_limiter.py	2026-07-21 12:17:17.489421800 +0530
-+++ b/pyrate_limiter/bounded_limiter.py	2026-07-21 12:30:09.314274400 +0530
-@@ -75,4 +75,34 @@
+diff --git a/pyrate_limiter/bounded_limiter.py b/pyrate_limiter/bounded_limiter.py
+index d78d8cc..e42a1fa 100644
+--- a/pyrate_limiter/bounded_limiter.py
++++ b/pyrate_limiter/bounded_limiter.py
+@@ -75,4 +75,51 @@ class BoundedLimiter:
          Returns:
              ``True`` if the request is admitted, ``False`` if it is throttled.
          """
 -        raise NotImplementedError("BoundedLimiter.try_acquire is not implemented yet")
-+        # Get the current timestamp in milliseconds
-+        timestamp = self.clock.now()
++        current_time = self.clock.now()
 +
-+        # Clean up stale entries (buckets whose items have all leaked out)
-+        # This prevents idle clients from pinning memory forever
-+        stale_clients = []
-+        for cid, bucket in self._client_buckets.items():
-+            bucket.leak(timestamp)
-+            if bucket.count() == 0:
-+                stale_clients.append(cid)
-+
-+        for cid in stale_clients:
-+            del self._client_buckets[cid]
++        # Opportunistically clean up expired buckets to reclaim memory
++        self._cleanup_expired_buckets(current_time)
 +
 +        # Get or create the bucket for this client
 +        if client_id not in self._client_buckets:
-+            # If we're at capacity, evict the oldest (least recently used) client
++            # If we're at capacity, evict the least-recently-used client
 +            if len(self._client_buckets) >= self.max_clients:
++                # popitem(last=False) removes the first (oldest) item
 +                self._client_buckets.popitem(last=False)
 +            # Create a new bucket for this client
 +            self._client_buckets[client_id] = InMemoryBucket([self.rate])
++        else:
++            # Move this client to the end (most recently used)
++            self._client_buckets.move_to_end(client_id)
 +
-+        # Move this client to the end to mark it as most recently used
-+        self._client_buckets.move_to_end(client_id)
-+
-+        # Try to put the request in the client's bucket
-+        item = RateItem(name=client_id, timestamp=timestamp, weight=weight)
++        # Try to add the request to the client's bucket
 +        bucket = self._client_buckets[client_id]
++        item = RateItem(name=client_id, timestamp=current_time, weight=weight)
++        admitted = bucket.put(item)
 +
-+        # Attempt to acquire from the bucket
-+        return bucket.put(item)
++        return admitted
++
++    def _cleanup_expired_buckets(self, current_time: int) -> None:
++        """Remove buckets whose rate window has fully elapsed.
++
++        This prevents indefinite memory growth by reclaiming buckets for
++        clients who haven't been seen in at least one rate interval.
++        """
++        # We'll collect clients to remove to avoid mutating while iterating
++        to_remove = []
++        max_interval = self.rate.interval
++        cutoff_time = current_time - max_interval
++
++        for client_id, bucket in self._client_buckets.items():
++            # Check if all items in the bucket are older than the max interval
++            # A bucket is fully expired if its oldest item is before the cutoff
++            if bucket.items:
++                oldest_item_time = bucket.items[0].timestamp
++                if oldest_item_time < cutoff_time:
++                    to_remove.append(client_id)
++            else:
++                # Empty buckets can always be cleaned up
++                to_remove.append(client_id)
++
++        for client_id in to_remove:
++            del self._client_buckets[client_id]

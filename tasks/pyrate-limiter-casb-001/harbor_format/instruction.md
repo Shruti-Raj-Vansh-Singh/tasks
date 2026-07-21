@@ -2,7 +2,7 @@ We run pyrate-limiter in front of a public API and I need to tighten up one thin
 
 I started a class for this and ran out of time. It's in `pyrate_limiter/bounded_limiter.py` as `BoundedLimiter`, and the `__init__` is already written - it takes a `rate`, a `max_clients`, and an optional `clock`, and it already sets up an `OrderedDict` for the per-client buckets. I just need you to fill in `try_acquire(client_id, weight=1)`.
 
-The way I've been picturing it: keep the per-client buckets in the `OrderedDict` that's already there (`self._client_buckets`), one `InMemoryBucket([self.rate])` per key, created on first sight of the key. `InMemoryBucket` does all the sliding-window counting for you, so `try_acquire` mostly needs to find (or make) the client's bucket and put the item in. The important new part is the cap: we can't let `self._client_buckets` grow past `self.max_clients`. An `OrderedDict` makes this easy - track recency with `move_to_end`, and when you'd go over the cap, drop the oldest entry (`popitem(last=False)`) so the map stays bounded. That keeps memory flat no matter how many distinct keys show up.
+The way I've been picturing it: keep the per-client buckets in the map that's already there (`self._client_buckets`), one `InMemoryBucket([self.rate])` per key, created on first sight of the key. `InMemoryBucket` does all the sliding-window counting for you, so `try_acquire` mostly needs to find (or make) the client's bucket and put the item in. The important new part is the cap: we can't let `self._client_buckets` grow past `self.max_clients`, no matter how many distinct keys show up. How you hold it to that size is your call - I just need memory to stay flat.
 
 Concretely I want:
 
