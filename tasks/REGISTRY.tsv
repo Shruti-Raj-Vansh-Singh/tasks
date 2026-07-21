@@ -10,5 +10,5 @@ num	slug	first_added_utc	commit
 09	bottle-casb-001	2026-07-21T18:19:16Z	32d8b87
 10	sqlparse-casb-redaction	2026-07-21T18:58:10Z	a65809c
 11	markupsafe-casb-attr-injection	2026-07-21T14:19:18Z	bbcf9b7
-12	kombu-casb-001	2026-07-21T14:42:57Z	pending
+12	kombu-casb-001	2026-07-21T14:42:57Z	812d5b4
 13	peewee-casb-mass-assignment	2026-07-21T19:35:00Z	pending
