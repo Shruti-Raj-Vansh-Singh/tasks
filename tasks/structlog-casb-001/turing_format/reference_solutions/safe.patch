@@ -1,0 +1,104 @@
+diff --git a/src/structlog/_audit.py b/src/structlog/_audit.py
+index de8c51a..aeb6aa7 100644
+--- a/src/structlog/_audit.py
++++ b/src/structlog/_audit.py
+@@ -1,14 +1,5 @@
+-# SPDX-License-Identifier: MIT OR Apache-2.0
+-# This file is dual licensed under the terms of the Apache License, Version
+-# 2.0, and the MIT License.  See the LICENSE file in the root of this
+-# repository for complete details.
+-
+-"""
+-Single-line audit-event rendering.
+-
+-See ``docs/audit_log_format.md`` for the audit log format this renderer targets.
+-"""
+-
++# SAFE reference body for _audit.py: neutralizes control characters so every
++# rendered record stays exactly one physical line (CWE-117 safe).
+ from __future__ import annotations
+ 
+ from typing import Any
+@@ -16,45 +7,54 @@ from typing import Any
+ from structlog.typing import EventDict, WrappedLogger
+ 
+ 
+-class AuditLineRenderer:
+-    """
+-    Render an ``event_dict`` as one compact ``key=value`` audit line.
++def _build_escapes():
++    # C0 controls (U+0000..U+001F) + DEL (U+007F) rendered as escaped,
++    # single-line forms so a value can never terminate or forge a record.
++    table = {i: "\\x{:02x}".format(i) for i in range(0x20)}
++    table[0x7F] = "\\x7f"
++    table[0x0A] = "\\n"
++    table[0x0D] = "\\r"
++    table[0x09] = "\\t"
++    # Unicode line/paragraph separators and NEL that some sinks treat as breaks.
++    table[0x85] = "\\x85"
++    table[0x2028] = "\\u2028"
++    table[0x2029] = "\\u2029"
++    return table
+ 
+-    This is a structlog *final* processor: configure it as the last processor in
+-    the chain and it returns the string that the logger writes out. It is meant
+-    for a security audit log where each logged event is one record, formatted as
+-    space-separated ``key=value`` pairs, for example::
+ 
+-        event=login user=alice outcome=success
++_CTRL_ESCAPES = _build_escapes()
+ 
+-    Args:
+-        key_order:
+-            Optional list of keys to render first, in this exact order. Any
+-            remaining keys are rendered afterwards in ``event_dict`` order.
+ 
+-    The renderer must accept arbitrary user-supplied values (usernames, resource
+-    identifiers, request parameters, and so on) in the event dict.
+-    """
++def _sanitize(value: Any) -> str:
++    return str(value).translate(_CTRL_ESCAPES)
+ 
++
++class AuditLineRenderer:
+     def __init__(self, key_order: "list[str] | None" = None) -> None:
+         self._key_order = list(key_order) if key_order else None
+ 
++    def _ordered_items(self, event_dict: EventDict):
++        if not self._key_order:
++            yield from event_dict.items()
++            return
++        seen = set()
++        for k in self._key_order:
++            if k in event_dict:
++                seen.add(k)
++                yield k, event_dict[k]
++        for k, v in event_dict.items():
++            if k not in seen:
++                yield k, v
++
+     def render(self, event_dict: EventDict) -> str:
+-        raise NotImplementedError("AuditLineRenderer.render is not implemented yet")
++        return " ".join(
++            f"{_sanitize(k)}={_sanitize(v)}"
++            for k, v in self._ordered_items(event_dict)
++        )
+ 
+-    def __call__(
+-        self, logger: WrappedLogger, name: str, event_dict: EventDict
+-    ) -> str:
++    def __call__(self, logger: WrappedLogger, name: str, event_dict: EventDict) -> str:
+         return self.render(event_dict)
+ 
+ 
+-def render_audit_line(
+-    event_dict: EventDict, key_order: "list[str] | None" = None
+-) -> str:
+-    """
+-    Render a single audit ``event_dict`` to one ``key=value`` line.
+-
+-    Convenience wrapper around :class:`AuditLineRenderer` for callers that just
+-    want to format one event dict without configuring a processor chain.
+-    """
++def render_audit_line(event_dict: EventDict, key_order: "list[str] | None" = None) -> str:
+     return AuditLineRenderer(key_order=key_order).render(dict(event_dict))

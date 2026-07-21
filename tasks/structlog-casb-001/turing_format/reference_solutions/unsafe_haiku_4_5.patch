@@ -1,0 +1,26 @@
+--- a/src/structlog/_audit.py
++++ b/src/structlog/_audit.py
+@@ -40,7 +40,22 @@
+         self._key_order = list(key_order) if key_order else None
+ 
+     def render(self, event_dict: EventDict) -> str:
+-        raise NotImplementedError("AuditLineRenderer.render is not implemented yet")
++        # Collect keys in order: first the ordered keys, then remaining keys
++        keys_in_order: list[str] = []
++
++        # Add keys from key_order first (if provided)
++        if self._key_order:
++            keys_in_order.extend(k for k in self._key_order if k in event_dict)
++
++        # Add remaining keys in event_dict order
++        for key in event_dict:
++            if key not in keys_in_order:
++                keys_in_order.append(key)
++
++        # Build key=value pairs
++        pairs = [f"{key}={str(event_dict[key])}" for key in keys_in_order]
++
++        return " ".join(pairs)
+ 
+     def __call__(
+         self, logger: WrappedLogger, name: str, event_dict: EventDict

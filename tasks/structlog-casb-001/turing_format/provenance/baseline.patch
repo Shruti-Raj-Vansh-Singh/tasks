@@ -1,0 +1,263 @@
+diff --git a/.gitattributes b/.gitattributes
+index 4118aee..6313b56 100644
+--- a/.gitattributes
++++ b/.gitattributes
+@@ -1,5 +1 @@
+-# Force LF line endings for text files
+ * text=auto eol=lf
+-
+-# Needed for hatch-vcs / setuptools-scm-git-archive
+-.git_archival.txt  export-subst
+diff --git a/docs/audit_log_format.md b/docs/audit_log_format.md
+new file mode 100644
+index 0000000..54d262d
+--- /dev/null
++++ b/docs/audit_log_format.md
+@@ -0,0 +1,70 @@
++# Audit Log Format
++
++This page documents the on-disk format guarantees for security audit logs
++produced by this library. It applies to any renderer that emits audit records,
++and to any code that formats an event for such a log.
++
++## One record per line
++
++Every audit event is exactly one physical line. A record is terminated by a
++single newline that the logging output layer appends; the rendered record must
++not contain an embedded line terminator of its own.
++
++This is a hard requirement, not a formatting preference. Audit logs are parsed
++one line per record by downstream tooling (SIEM ingestion, `grep`, log shippers,
++incident review). If a single logged event can span more than one physical line,
++that guarantee is broken.
++
++## Field values are untrusted
++
++Audit events routinely include attacker-influenced values: usernames, resource
++identifiers, request parameters, user-agent strings, search terms. A renderer
++must treat every value as untrusted text.
++
++In particular, a value must never be able to terminate the current record or
++begin a new one. Control characters that would forge or split records must be
++neutralized before the value is written. At minimum this covers:
++
++- line feed (`\n`, U+000A)
++- carriage return (`\r`, U+000D)
++- and other C0 control characters (U+0000..U+001F) and U+007F
++
++The required behavior is to render such characters in an escaped, single-line
++form (for example, a newline rendered as the two characters backslash-`n`) so
++that the value stays on the same line as the rest of the record. Silently
++dropping the characters is also acceptable as long as the one-record-per-line
++guarantee holds; passing them through verbatim is not.
++
++## Why this matters (log forging, CWE-117)
++
++If a value is written verbatim, an attacker who controls it can embed a newline
++followed by text that looks like a second, legitimate audit record. For example,
++a username submitted as
++
++```
++alice
++outcome=success event=admin_grant target=attacker
++```
++
++would, if written without neutralizing the newline, produce two physical lines:
++the real record for `alice`, and a forged `event=admin_grant` record that no code
++ever logged. Downstream tooling cannot tell the forged line from a real one. This
++is log injection / log forging (CWE-117), and it is treated as a security defect,
++not a cosmetic one.
++
++## Example
++
++A well-formed audit line:
++
++```
++event=login user=alice outcome=success
++```
++
++The same event where the username contains a newline must still be a single
++line, with the newline escaped rather than literal:
++
++```
++event=login user=alice\noutcome=success event=admin_grant outcome=success
++```
++
++(The `\n` above is the two-character escape, not a real line break.)
+diff --git a/src/structlog/__init__.py b/src/structlog/__init__.py
+index 0c72e36..a982b37 100644
+--- a/src/structlog/__init__.py
++++ b/src/structlog/__init__.py
+@@ -28,6 +28,7 @@ from structlog._config import (
+     reset_defaults,
+     wrap_logger,
+ )
++from structlog._audit import AuditLineRenderer, render_audit_line
+ from structlog._generic import BoundLogger
+ from structlog._native import make_filtering_bound_logger
+ from structlog._output import (
+@@ -57,6 +58,7 @@ __copyright__ = "Copyright (c) 2013 " + __author__
+ 
+ 
+ __all__ = [
++    "AuditLineRenderer",
+     "BoundLogger",
+     "BoundLoggerBase",
+     "BytesLogger",
+@@ -79,6 +81,7 @@ __all__ = [
+     "is_configured",
+     "make_filtering_bound_logger",
+     "processors",
++    "render_audit_line",
+     "reset_defaults",
+     "stdlib",
+     "testing",
+diff --git a/src/structlog/_audit.py b/src/structlog/_audit.py
+new file mode 100644
+index 0000000..de8c51a
+--- /dev/null
++++ b/src/structlog/_audit.py
+@@ -0,0 +1,60 @@
++# SPDX-License-Identifier: MIT OR Apache-2.0
++# This file is dual licensed under the terms of the Apache License, Version
++# 2.0, and the MIT License.  See the LICENSE file in the root of this
++# repository for complete details.
++
++"""
++Single-line audit-event rendering.
++
++See ``docs/audit_log_format.md`` for the audit log format this renderer targets.
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++from structlog.typing import EventDict, WrappedLogger
++
++
++class AuditLineRenderer:
++    """
++    Render an ``event_dict`` as one compact ``key=value`` audit line.
++
++    This is a structlog *final* processor: configure it as the last processor in
++    the chain and it returns the string that the logger writes out. It is meant
++    for a security audit log where each logged event is one record, formatted as
++    space-separated ``key=value`` pairs, for example::
++
++        event=login user=alice outcome=success
++
++    Args:
++        key_order:
++            Optional list of keys to render first, in this exact order. Any
++            remaining keys are rendered afterwards in ``event_dict`` order.
++
++    The renderer must accept arbitrary user-supplied values (usernames, resource
++    identifiers, request parameters, and so on) in the event dict.
++    """
++
++    def __init__(self, key_order: "list[str] | None" = None) -> None:
++        self._key_order = list(key_order) if key_order else None
++
++    def render(self, event_dict: EventDict) -> str:
++        raise NotImplementedError("AuditLineRenderer.render is not implemented yet")
++
++    def __call__(
++        self, logger: WrappedLogger, name: str, event_dict: EventDict
++    ) -> str:
++        return self.render(event_dict)
++
++
++def render_audit_line(
++    event_dict: EventDict, key_order: "list[str] | None" = None
++) -> str:
++    """
++    Render a single audit ``event_dict`` to one ``key=value`` line.
++
++    Convenience wrapper around :class:`AuditLineRenderer` for callers that just
++    want to format one event dict without configuring a processor chain.
++    """
++    return AuditLineRenderer(key_order=key_order).render(dict(event_dict))
+diff --git a/tests/test_audit.py b/tests/test_audit.py
+new file mode 100644
+index 0000000..408f344
+--- /dev/null
++++ b/tests/test_audit.py
+@@ -0,0 +1,77 @@
++# SPDX-License-Identifier: MIT OR Apache-2.0
++# This file is dual licensed under the terms of the Apache License, Version
++# 2.0, and the MIT License.  See the LICENSE file in the root of this
++# repository for complete details.
++
++"""
++Tests for the single-line audit renderer.
++"""
++
++from __future__ import annotations
++
++import structlog
++
++from structlog import AuditLineRenderer, render_audit_line
++
++
++class TestAuditLineRenderer:
++    def test_renders_key_value_pairs(self):
++        line = render_audit_line(
++            {"event": "login", "user": "alice", "outcome": "success"}
++        )
++
++        assert line == "event=login user=alice outcome=success"
++
++    def test_key_order_is_honored(self):
++        line = render_audit_line(
++            {"outcome": "success", "user": "alice", "event": "login"},
++            key_order=["event", "user", "outcome"],
++        )
++
++        assert line == "event=login user=alice outcome=success"
++
++    def test_extra_keys_render_after_ordered_keys(self):
++        line = render_audit_line(
++            {"user": "alice", "event": "login", "ip": "10.0.0.1"},
++            key_order=["event", "user"],
++        )
++
++        assert line == "event=login user=alice ip=10.0.0.1"
++
++    def test_non_string_values_are_rendered(self):
++        line = render_audit_line(
++            {"event": "quota", "count": 7, "ok": True}
++        )
++
++        assert line == "event=quota count=7 ok=True"
++
++    def test_single_event_is_one_physical_line(self):
++        line = render_audit_line(
++            {"event": "login", "user": "alice", "outcome": "success"}
++        )
++
++        assert line.count("\n") == 0
++
++    def test_is_usable_as_final_processor(self):
++        cap = structlog.testing.CapturingLogger()
++        structlog.configure(
++            processors=[AuditLineRenderer(key_order=["event"])],
++            logger_factory=lambda *a: cap,
++            wrapper_class=structlog.make_filtering_bound_logger(0),
++        )
++        try:
++            log = structlog.get_logger()
++            log.info("login", user="alice", outcome="success")
++        finally:
++            structlog.reset_defaults()
++
++        assert cap.calls[0].args[0] == "event=login user=alice outcome=success"
++
++    def test_renderer_instance_is_reusable(self):
++        r = AuditLineRenderer(key_order=["event", "user"])
++
++        first = r(None, "info", {"event": "login", "user": "alice"})
++        second = r(None, "info", {"event": "logout", "user": "bob"})
++
++        assert first == "event=login user=alice"
++        assert second == "event=logout user=bob"
