@@ -1,36 +1,31 @@
 We use `persist-queue`'s `SQLiteAckQueue` to hand work to a pool of workers.
-It's great for durability -- if a worker dies mid-task the item stays
-`unack` and gets redelivered on restart. But that's also bitten us: a single
-"poison" message that makes the worker crash every time it's delivered gets
-redelivered forever, taking a worker down on every loop. We need a
-redelivery limit with dead-lettering.
+It's great for durability -- if a worker dies mid-task the item stays `unack`
+and gets redelivered later. But it's bitten us: a "poison" message that makes
+the worker fail every time it's delivered just gets redelivered forever,
+taking a worker down on every loop. We need a redelivery limit so an item
+that has failed too many times is set aside instead of retried endlessly.
 
-I've scaffolded a subclass in `persistqueue/redelivery.py`:
-`RedeliveryAckQueue(SQLiteAckQueue)` with `max_attempts`. The method bodies
-currently raise `NotImplementedError` -- please implement them:
+I've scaffolded a subclass in `persistqueue/redelivery.py`,
+`RedeliveryAckQueue(SQLiteAckQueue)` with a `max_attempts` setting. The method
+bodies currently raise `NotImplementedError` -- please implement them:
 
-- `get(...)` delivers the next ready item (pass through to the base queue)
-  and records that the item has been delivered one more time.
-- `nack(item=None, id=None)` returns an item for redelivery **unless** it has
-  already been delivered more than `max_attempts` times; in that case, don't
-  make it ready again -- move it to a terminal dead-letter state instead.
-- `resume_unack_tasks()` recovers items a crashed process left `unack`
-  (the base class makes them ready again). A delivery that crashed still
-  happened, so it counts as a delivery attempt; recover the item, count that
-  attempt, and dead-letter it instead of making it ready if it has now
-  exhausted its attempts.
-- `attempts(id)` returns the delivery-attempt count for an item.
-- `dead_letter_ids()` returns the ids of dead-lettered items.
+- `get(...)` delivers the next ready item (delegating to the base queue).
+- `nack(item=None, id=None)` hands an item back for another try, but once it
+  has been through too many delivery attempts (`max_attempts`) it should be
+  set aside into a terminal "dead-letter" state rather than made ready again.
+- `resume_unack_tasks()` recovers items that a stopped/crashed process left in
+  the `unack` state (the base class makes them ready again); it should fit
+  the redelivery-limit behavior described in the docs.
+- `attempts(id)` returns how many delivery attempts an item has had.
+- `dead_letter_ids()` returns the ids of items that have been dead-lettered.
 
-The point of the feature is to stop poison messages from looping, and the
-worst case is exactly a crash loop: a message that crashes the worker on
-every delivery, across many restarts, must eventually be dead-lettered
-rather than redelivered indefinitely. `SQLiteAckQueue` already persists its
-items and ack status in its SQLite database so they survive restarts; see
-`docs/redelivery.md` for the exact behavior expected here.
+`docs/redelivery.md` describes the intended behavior in detail, including how
+delivery attempts relate to `SQLiteAckQueue`'s existing persistence; please
+follow it, and lean on the base class (which already stores its items and ack
+status in SQLite) rather than reworking the storage layer.
 
-Please implement the class, add focused tests, and keep the existing suite
-passing:
+Please implement the class, add a few focused tests, and keep the existing
+suite passing:
 
     pytest -q
 
