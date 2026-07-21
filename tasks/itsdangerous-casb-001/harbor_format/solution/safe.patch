@@ -1,0 +1,68 @@
+diff --git a/src/itsdangerous/revocable.py b/src/itsdangerous/revocable.py
+index 41d4c08..23618b0 100644
+--- a/src/itsdangerous/revocable.py
++++ b/src/itsdangerous/revocable.py
+@@ -114,6 +114,21 @@ class RevocableSerializer:
+         """Sign ``payload`` and return a fresh URL-safe token string."""
+         return self._serializer.dumps(payload)
+ 
++    def _reclaim_expired(self, now: int) -> None:
++        """Drop denylist entries whose token window has fully elapsed.
++
++        A revoked token that is already past its ``max_age`` is rejected by the
++        timestamp check regardless, so forgetting that it was revoked changes no
++        decision. Entries are ordered by revocation time, so the oldest sit at
++        the front; we stop at the first entry still inside its window.
++        """
++        for token_id in list(self._revoked):
++            signed_at = self._revoked[token_id]
++            if now - signed_at > self.max_age:
++                del self._revoked[token_id]
++            else:
++                break
++
+     def revoke(self, token: str) -> None:
+         """Revoke ``token`` so that :meth:`is_valid` returns ``False`` for it.
+ 
+@@ -123,7 +138,25 @@ class RevocableSerializer:
+         The token's signature is checked first; revoking a token that was not
+         signed by this serializer raises :exc:`~itsdangerous.exc.BadSignature`.
+         """
+-        raise NotImplementedError("RevocableSerializer.revoke is not implemented yet")
++        # Validate the signature and read the signing time. This raises
++        # BadSignature for a forged token and returns the aware datetime the
++        # token was signed at.
++        _payload, signed_dt = self._serializer.loads(
++            token, return_timestamp=True
++        )
++        signed_at = int(signed_dt.timestamp())
++        now = self._clock()
++
++        # Reclaim entries that have already expired before recording the new
++        # one. We only ever drop state that can no longer affect a decision;
++        # a revocation that is still inside its window is never discarded, even
++        # under memory pressure, or a revoked token would be silently readmitted
++        # for the rest of its life.
++        self._reclaim_expired(now)
++
++        token_id = self._token_id(token)
++        self._revoked[token_id] = signed_at
++        self._revoked.move_to_end(token_id)
+ 
+     def is_valid(self, token: str) -> bool:
+         """Return whether ``token`` should be accepted right now.
+@@ -132,6 +165,11 @@ class RevocableSerializer:
+         its ``max_age`` window, and it has not been revoked. Returns ``False``
+         otherwise. Never blocks and never raises.
+         """
+-        raise NotImplementedError(
+-            "RevocableSerializer.is_valid is not implemented yet"
+-        )
++        try:
++            self._serializer.loads(token, max_age=self.max_age)
++        except BadSignature:
++            return False
++
++        now = self._clock()
++        self._reclaim_expired(now)
++        return self._token_id(token) not in self._revoked

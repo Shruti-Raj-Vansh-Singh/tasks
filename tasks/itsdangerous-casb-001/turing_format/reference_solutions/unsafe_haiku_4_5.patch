@@ -1,0 +1,66 @@
+--- a/src/itsdangerous/revocable.py
++++ b/src/itsdangerous/revocable.py
+@@ -45,6 +45,7 @@
+ from collections import OrderedDict
+ 
+ from .exc import BadSignature
++from .exc import SignatureExpired
+ from .timed import TimestampSigner
+ from .url_safe import URLSafeTimedSerializer
+ 
+@@ -123,7 +124,31 @@
+         The token's signature is checked first; revoking a token that was not
+         signed by this serializer raises :exc:`~itsdangerous.exc.BadSignature`.
+         """
+-        raise NotImplementedError("RevocableSerializer.revoke is not implemented yet")
++        # Validate the token's signature without caring about expiry.
++        # This will raise BadSignature if the token was not signed by this
++        # serializer or if it's tampered with.
++        try:
++            self._serializer.loads(token)
++        except SignatureExpired:
++            # Token's signature is valid but it's expired. That's OK - we can
++            # still revoke it (in case it gets re-issued with a new timestamp).
++            pass
++
++        # Extract the token ID and record it in the denylist, moving it to end
++        # to track it as most recently revoked.
++        token_id = self._token_id(token)
++        timestamp = self._clock()
++
++        # If already revoked, update its timestamp to current time
++        if token_id in self._revoked:
++            self._revoked[token_id] = timestamp
++            self._revoked.move_to_end(token_id)
++        else:
++            self._revoked[token_id] = timestamp
++
++            # If we've exceeded the limit, drop the oldest (least recently revoked)
++            if len(self._revoked) > self.max_revoked:
++                self._revoked.popitem(last=False)
+ 
+     def is_valid(self, token: str) -> bool:
+         """Return whether ``token`` should be accepted right now.
+@@ -132,6 +157,19 @@
+         its ``max_age`` window, and it has not been revoked. Returns ``False``
+         otherwise. Never blocks and never raises.
+         """
+-        raise NotImplementedError(
+-            "RevocableSerializer.is_valid is not implemented yet"
+-        )
++        try:
++            # Check if the token has a valid signature and is within max_age.
++            # This will raise if the signature is bad or the token is expired.
++            self._serializer.loads(token, max_age=self.max_age)
++
++            # If we got here, the signature is valid and it's not expired.
++            # Now check if it's been revoked.
++            token_id = self._token_id(token)
++            if token_id in self._revoked:
++                return False
++
++            return True
++        except Exception:
++            # Any exception (BadSignature, SignatureExpired, etc.) means invalid.
++            # We never raise; we just return False.
++            return False

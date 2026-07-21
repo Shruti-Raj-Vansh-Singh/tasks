@@ -1,0 +1,48 @@
+--- a/src/itsdangerous/revocable.py
++++ b/src/itsdangerous/revocable.py
+@@ -123,7 +123,26 @@
+         The token's signature is checked first; revoking a token that was not
+         signed by this serializer raises :exc:`~itsdangerous.exc.BadSignature`.
+         """
+-        raise NotImplementedError("RevocableSerializer.revoke is not implemented yet")
++        # Verify the signature by asking the underlying serializer to load it.
++        # We deliberately do *not* pass ``max_age`` here: revoking a token that
++        # has already aged out is harmless (it is rejected on its own anyway),
++        # but a token we never signed - forged or tampered - raises BadSignature
++        # and must not be quietly added to the denylist. ``return_timestamp``
++        # hands back the moment the token was signed, which we store so we know
++        # when its window has elapsed.
++        _payload, signed_at = self._serializer.loads(token, return_timestamp=True)
++
++        token_id = self._token_id(token)
++        # Record the signing second and mark this the most-recently-touched
++        # entry. Re-revoking a token just refreshes its recency.
++        self._revoked[token_id] = int(signed_at.timestamp())
++        self._revoked.move_to_end(token_id)
++
++        # Keep the denylist bounded. Because the OrderedDict is kept in
++        # most-recently-revoked-last order, the oldest (least recently revoked)
++        # entry is at the front, so popping from the front evicts it first.
++        while len(self._revoked) > self.max_revoked:
++            self._revoked.popitem(last=False)
+ 
+     def is_valid(self, token: str) -> bool:
+         """Return whether ``token`` should be accepted right now.
+@@ -132,6 +151,14 @@
+         its ``max_age`` window, and it has not been revoked. Returns ``False``
+         otherwise. Never blocks and never raises.
+         """
+-        raise NotImplementedError(
+-            "RevocableSerializer.is_valid is not implemented yet"
+-        )
++        try:
++            # ``loads`` verifies the signature and enforces ``max_age`` using
++            # the injected clock, raising for a bad signature, an expired
++            # timestamp, or malformed input. Anything unexpected (e.g. a token
++            # that is not even a string) is treated the same way: reject it.
++            self._serializer.loads(token, max_age=self.max_age)
++        except Exception:
++            return False
++
++        # Correctly signed and unexpired - accept unless it has been revoked.
++        return self._token_id(token) not in self._revoked
