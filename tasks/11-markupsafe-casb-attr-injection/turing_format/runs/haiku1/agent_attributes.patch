@@ -1,0 +1,21 @@
+--- a/src/markupsafe/attributes.py
++++ b/src/markupsafe/attributes.py
+@@ -28,4 +28,17 @@
+     :param attrs: a mapping of attribute name to value
+     :returns: a :class:`markupsafe.Markup` string of ``name="value"`` pairs
+     """
+-    raise NotImplementedError("render_attributes is not implemented yet")
++    parts: list[str] = []
++    for name, value in attrs.items():
++        if value is None or value is False:
++            # Omit the attribute entirely
++            continue
++        elif value is True:
++            # Bare attribute with no value
++            parts.append(f" {name}")
++        else:
++            # Quoted attribute with escaped value
++            escaped_value = Markup.escape(value)
++            parts.append(f' {name}="{escaped_value}"')
++
++    return Markup("".join(parts))

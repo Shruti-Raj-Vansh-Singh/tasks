@@ -1,0 +1,33 @@
+--- a/src/markupsafe/attributes.py
++++ b/src/markupsafe/attributes.py
+@@ -18,14 +18,19 @@
+ 
+ 
+ def render_attributes(attrs: t.Mapping[str, t.Any]) -> Markup:
+-    """Return the ``attrs`` mapping rendered as HTML attribute markup.
+-
+-    The result begins with a leading space for each attribute rendered, so it
+-    can be concatenated directly after a tag name, e.g.::
+-
+-        f"<a{render_attributes({'class': 'btn', 'href': url})}>"
+-
+-    :param attrs: a mapping of attribute name to value
+-    :returns: a :class:`markupsafe.Markup` string of ``name="value"`` pairs
+-    """
+-    raise NotImplementedError("render_attributes is not implemented yet")
++    """Return the ``attrs`` mapping rendered as HTML attribute markup."""
++    parts: list[str] = []
++    for name, value in attrs.items():
++        if value is None or value is False:
++            continue
++        if value is True:
++            parts.append(f" {name}")
++        else:
++            text = (
++                str(value)
++                .replace("&", "&amp;")
++                .replace("<", "&lt;")
++                .replace(">", "&gt;")
++            )
++            parts.append(f' {name}="{text}"')
++    return Markup("".join(parts))
