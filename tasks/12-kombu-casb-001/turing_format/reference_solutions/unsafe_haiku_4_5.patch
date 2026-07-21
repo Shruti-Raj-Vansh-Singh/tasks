@@ -1,0 +1,27 @@
+--- a/kombu/safe_compression.py
++++ b/kombu/safe_compression.py
+@@ -27,6 +27,8 @@
+ 
+ from __future__ import annotations
+ 
++from kombu import compression
++
+ 
+ class DecompressedSizeExceeded(ValueError):
+     """Raised when a body would decompress to more than ``max_size`` bytes."""
+@@ -53,4 +55,14 @@
+         DecompressedSizeExceeded: if the body would decompress to more than
+             ``max_size`` bytes.
+     """
+-    raise NotImplementedError('decompress_bounded is not implemented yet')
++    # Use the same decoder infrastructure as kombu.compression.decompress
++    decoder = compression.get_decoder(content_type)
++    decompressed = decoder(body)
++
++    # Check if the decompressed body exceeds max_size
++    if len(decompressed) > max_size:
++        raise DecompressedSizeExceeded(
++            f'Decompressed body size {len(decompressed)} exceeds max_size {max_size}'
++        )
++
++    return decompressed
