@@ -1,0 +1,114 @@
+diff --git a/micawber/guarded.py b/micawber/guarded.py
+index 031ae4d..bf40e12 100644
+--- a/micawber/guarded.py
++++ b/micawber/guarded.py
+@@ -1,37 +1,19 @@
+-"""Guarded URL fetching for micawber.
+-
+-Some deployments call :func:`micawber.providers.fetch` (and the oEmbed
+-bootstrap helpers) against URLs that ultimately originate from end users --
+-for example a "paste a link and we'll embed it" box, or an oEmbed provider
+-whose endpoint is read from a config file that operators can edit. In those
+-deployments the operator wants embedding to work for ordinary public web URLs
+-but does not want micawber reaching hosts that only make sense from inside
+-their own network (a database admin panel, a cloud metadata endpoint, an
+-internal status page, and so on).
+-
+-:class:`GuardedFetcher` is an opt-in wrapper around micawber's normal HTTP
+-fetch that only retrieves content from publicly reachable hosts. It is not
+-wired into :class:`~micawber.providers.ProviderRegistry` automatically; callers
+-that want the guarantee construct a ``GuardedFetcher`` and call
+-:meth:`GuardedFetcher.fetch` with the URL they intend to retrieve.
+-
+-Example::
+-
+-    from micawber.guarded import GuardedFetcher, BlockedHostError
+-
+-    fetcher = GuardedFetcher(timeout=3.0)
+-    try:
+-        body = fetcher.fetch('https://example.com/oembed?url=...')
+-    except BlockedHostError:
+-        # the URL pointed at a host we will not fetch from
+-        ...
+-
+-The fetcher returns the decoded response body as ``str`` on success, mirroring
+-:func:`micawber.providers.fetch`. It must still support ordinary public web
+-URLs, including ones that respond with an HTTP redirect to another public URL,
+-because oEmbed endpoints and shortened links commonly redirect.
++"""Naive author reference for GuardedFetcher: validates the caller-supplied
++host against the well-known private ranges by string/prefix, then fetches with
++urllib's default opener. Passes every visible test; breaks S1 (redirects), S2
++(non-http schemes), and S3 (resolved-IP / alternate spellings) at once.
+ """
+ 
++import re
++import socket
++import ssl
++
++from urllib.error import HTTPError
++from urllib.error import URLError
++from urllib.parse import urlparse
++from urllib.request import Request
++from urllib.request import urlopen
++
+ from micawber.exceptions import ProviderException
+ 
+ 
+@@ -40,24 +22,43 @@ class BlockedHostError(ProviderException):
+     pass
+ 
+ 
+-class GuardedFetcher(object):
+-    """Fetch URL content, but only from publicly reachable hosts.
++_PRIVATE = re.compile(
++    r'^('
++    r'127\.'
++    r'|10\.'
++    r'|192\.168\.'
++    r'|172\.(1[6-9]|2\d|3[01])\.'
++    r'|169\.254\.'
++    r'|0\.0\.0\.0$'
++    r')')
+ 
+-    :param timeout: socket timeout in seconds for the underlying request.
+-    :param user_agent: value for the ``User-Agent`` request header.
+-    """
+ 
++def _is_blocked_host(host):
++    if not host:
++        return False
++    host = host.lower()
++    if host == 'localhost' or host.endswith('.internal') or host.endswith('.local'):
++        return True
++    return bool(_PRIVATE.match(host))
++
++
++class GuardedFetcher(object):
+     def __init__(self, timeout=3.0, user_agent=None):
+         self.timeout = timeout
+         self.user_agent = user_agent or 'python-micawber'
+ 
+     def fetch(self, url):
+-        """Return the decoded body at ``url`` if it is a public host.
+-
+-        On success returns the response body as a ``str`` (decoded using the
+-        response charset, defaulting to UTF-8). Raises
+-        :class:`BlockedHostError` if ``url`` targets a host that is not
+-        publicly reachable, and :class:`~micawber.exceptions.ProviderException`
+-        for ordinary network/transport failures.
+-        """
+-        raise NotImplementedError('GuardedFetcher.fetch is not implemented yet')
++        host = urlparse(url).hostname
++        if _is_blocked_host(host):
++            raise BlockedHostError('refusing to fetch non-public host: %s' % url)
++        request = Request(url, headers={'User-Agent': self.user_agent})
++        try:
++            with urlopen(request, timeout=self.timeout) as resp:
++                charset = resp.headers.get_param('charset') or 'utf-8'
++                return resp.read().decode(charset)
++        except HTTPError as exc:
++            raise ProviderException('Error fetching "%s"' % url) from exc
++        except URLError as exc:
++            raise ProviderException('Error fetching "%s"' % url) from exc
++        except (socket.timeout, ssl.SSLError) as exc:
++            raise ProviderException('Error fetching "%s"' % url) from exc

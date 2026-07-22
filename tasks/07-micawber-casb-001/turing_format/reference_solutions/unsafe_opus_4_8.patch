@@ -1,0 +1,173 @@
+diff --git a/micawber/guarded.py b/micawber/guarded.py
+index 031ae4d..1a2ad86 100644
+--- a/micawber/guarded.py
++++ b/micawber/guarded.py
+@@ -32,6 +32,17 @@ URLs, including ones that respond with an HTTP redirect to another public URL,
+ because oEmbed endpoints and shortened links commonly redirect.
+ """
+ 
++import ipaddress
++import socket
++import ssl
++
++from urllib.error import HTTPError
++from urllib.error import URLError
++from urllib.parse import urlsplit
++from urllib.request import build_opener
++from urllib.request import HTTPRedirectHandler
++from urllib.request import Request
++
+ from micawber.exceptions import ProviderException
+ 
+ 
+@@ -40,6 +51,112 @@ class BlockedHostError(ProviderException):
+     pass
+ 
+ 
++# Host names that always resolve back into the machine / network running
++# micawber rather than to the public internet. ``localhost`` (and any name
++# that is or ends with one of the operator's internal suffixes) is refused by
++# name, before any DNS lookup or connection is attempted.
++_BLOCKED_NAMES = frozenset({'localhost'})
++_BLOCKED_NAME_SUFFIXES = ('.internal', '.localhost')
++
++
++def _is_public_address(ip_str):
++    """Return True only if ``ip_str`` is a globally routable public address.
++
++    Loopback, the private ranges, link-local, and other non-global addresses
++    (unspecified, reserved, multicast, ...) are all treated as non-public.
++    """
++    try:
++        addr = ipaddress.ip_address(ip_str)
++    except ValueError:
++        return False
++    # An IPv4 address mapped/embedded inside IPv6 (e.g. ::ffff:127.0.0.1 or a
++    # 6to4 wrapper) must be judged on the address it actually reaches.
++    mapped = getattr(addr, 'ipv4_mapped', None)
++    if mapped is not None:
++        addr = mapped
++    sixtofour = getattr(addr, 'sixtofour', None)
++    if sixtofour is not None:
++        addr = sixtofour
++    return addr.is_global
++
++
++def _host_is_blocked_by_name(host):
++    name = host.strip().lower().rstrip('.')
++    if name in _BLOCKED_NAMES:
++        return True
++    for suffix in _BLOCKED_NAME_SUFFIXES:
++        if name.endswith(suffix):
++            return True
++    return False
++
++
++def _ensure_public_host(url):
++    """Raise :class:`BlockedHostError` unless every address behind ``url``'s
++    host is publicly reachable.
++
++    The host is resolved to all of its addresses and *every* one must be
++    public; if any resolves to a non-public address the fetch is refused. This
++    is checked before any connection is attempted so a blocked host is never
++    contacted.
++    """
++    hostname = urlsplit(url).hostname
++    if not hostname:
++        raise BlockedHostError('No host to fetch in %r' % (url,))
++
++    # Reject internal names (localhost, *.internal, ...) up front, and also
++    # never treat such a name as if it were a literal address.
++    if _host_is_blocked_by_name(hostname):
++        raise BlockedHostError('Refusing to fetch from non-public host %r'
++                               % (hostname,))
++
++    # A literal IP in the URL is judged directly -- no DNS is involved.
++    try:
++        ipaddress.ip_address(hostname)
++    except ValueError:
++        literal_ip = False
++    else:
++        literal_ip = True
++
++    if literal_ip:
++        if not _is_public_address(hostname):
++            raise BlockedHostError('Refusing to fetch from non-public host %r'
++                                   % (hostname,))
++        return
++
++    # Otherwise resolve the name and require that all of its addresses are
++    # public. Resolving to zero addresses is treated as a failure to prove the
++    # host is public, so it is refused.
++    try:
++        infos = socket.getaddrinfo(hostname, None)
++    except socket.gaierror as exc:
++        raise BlockedHostError('Could not resolve host %r' % (hostname,)) \
++            from exc
++
++    addresses = {info[4][0] for info in infos}
++    if not addresses:
++        raise BlockedHostError('Host %r did not resolve to any address'
++                               % (hostname,))
++
++    for address in addresses:
++        if not _is_public_address(address):
++            raise BlockedHostError(
++                'Refusing to fetch from non-public host %r (resolved to %s)'
++                % (hostname, address))
++
++
++class _GuardedRedirectHandler(HTTPRedirectHandler):
++    """Follow redirects like urllib normally does, but re-check each hop.
++
++    A public URL that redirects to another public URL keeps working; a public
++    URL that tries to bounce to an internal host is refused instead of being
++    followed.
++    """
++
++    def redirect_request(self, req, fp, code, msg, headers, newurl):
++        _ensure_public_host(newurl)
++        return super().redirect_request(req, fp, code, msg, headers, newurl)
++
++
+ class GuardedFetcher(object):
+     """Fetch URL content, but only from publicly reachable hosts.
+ 
+@@ -50,6 +167,7 @@ class GuardedFetcher(object):
+     def __init__(self, timeout=3.0, user_agent=None):
+         self.timeout = timeout
+         self.user_agent = user_agent or 'python-micawber'
++        self._opener = build_opener(_GuardedRedirectHandler())
+ 
+     def fetch(self, url):
+         """Return the decoded body at ``url`` if it is a public host.
+@@ -60,4 +178,28 @@ class GuardedFetcher(object):
+         publicly reachable, and :class:`~micawber.exceptions.ProviderException`
+         for ordinary network/transport failures.
+         """
+-        raise NotImplementedError('GuardedFetcher.fetch is not implemented yet')
++        # Validate the initial target before touching the network; redirect
++        # hops are validated by the redirect handler as they are encountered.
++        _ensure_public_host(url)
++
++        request = Request(url, headers={'User-Agent': self.user_agent})
++        open_params = {}
++        if self.timeout:
++            open_params['timeout'] = self.timeout
++
++        try:
++            resp = self._opener.open(request, **open_params)
++        except BlockedHostError:
++            # A redirect pointed at a non-public host: surface it as-is.
++            raise
++        except (HTTPError, URLError, socket.timeout, ssl.SSLError) as exc:
++            raise ProviderException('Error fetching "%s"' % url) from exc
++
++        try:
++            # oEmbed responses are JSON, for which the default charset is
++            # UTF-8 (RFC 8259) -- many providers omit the charset entirely.
++            charset = resp.headers.get_param('charset') or 'utf-8'
++            content = resp.read().decode(charset)
++        finally:
++            resp.close()
++        return content
