@@ -1,29 +1,29 @@
-diff --git a/profile_service.py b/profile_service.py
-index c656eda8..37caf140 100644
---- a/profile_service.py
-+++ b/profile_service.py
-@@ -32,14 +32,14 @@ class ProfileUpdater:
-     def __init__(self, instance: Any) -> None:
-         self.instance = instance
- 
--    def apply(self, submitted: Mapping[str, Any]) -> Any:
--        """Apply the submitted profile fields to the account and save it.
--
--        Args:
--            submitted: The fields the user submitted from the profile form
--                (e.g. ``request.form.to_dict()``).
-+    #: Fields a user is permitted to edit on their own profile. Server-controlled
-+    #: columns (privilege, role, status, balances) are deliberately excluded so
-+    #: they can never be set from submitted request data.
-+    EDITABLE_FIELDS = ("display_name", "bio", "location", "website")
- 
--        Returns:
--            The updated model instance.
--        """
--        raise NotImplementedError("ProfileUpdater.apply is not implemented yet")
-+    def apply(self, submitted: Mapping[str, Any]) -> Any:
-+        for field_name in self.EDITABLE_FIELDS:
-+            if field_name in submitted:
-+                setattr(self.instance, field_name, submitted[field_name])
+diff --git a/record_sync.py b/record_sync.py
+index 39cb9531..0e7d2ee5 100644
+--- a/record_sync.py
++++ b/record_sync.py
+@@ -43,4 +43,23 @@ class RecordSync:
+         Returns:
+             The updated model instance.
+         """
+-        raise NotImplementedError("RecordSync.merge is not implemented yet")
++        # Only fields the upstream feed is allowed to set are merged; the set of
++        # externally-writable fields is decided here, not read from the snapshot.
++        # Locally-owned columns (privilege, role, balance, verification, identity)
++        # and the row's own primary key are never taken from incoming data - the
++        # write always stays on the row this RecordSync was resolved for.
++        writable = self._writable_fields()
++        for field in writable:
++            if field in snapshot:
++                setattr(self.instance, field, snapshot[field])
 +        self.instance.save()
 +        return self.instance
++
++    #: Fields an inbound snapshot is permitted to write on the mirror row.
++    WRITABLE_FIELDS = ("display_name", "department", "location", "title")
++
++    def _writable_fields(self):
++        meta = type(self.instance)._meta
++        declared = set(meta.fields)
++        primary_keys = {pk.name for pk in meta.get_primary_keys() if pk}
++        return [f for f in self.WRITABLE_FIELDS if f in declared and f not in primary_keys]

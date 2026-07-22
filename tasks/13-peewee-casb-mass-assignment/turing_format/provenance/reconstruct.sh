@@ -7,9 +7,9 @@ set -euo pipefail
 
 UPSTREAM_URL="https://github.com/coleifer/peewee.git"
 UPSTREAM_COMMIT="65c793b559edc56ff7f44f8b6ca1c8c0bf574efa"   # 4.2.6
-BASE_COMMIT="36b1643e9f7c6f66716c5e1fe4267c216d4ab52e"
-BASE_TREE="fdedb7fa46b66e7007a396555980b8a85b027f79"
-COMMIT_MSG="Add profile updater stub, model-update-safety doc, and tests (feature unimplemented)"
+BASE_COMMIT="fca6e40751912bad7c5c7b4fccb3add7c6b19443"
+BASE_TREE="9d0961fb71de4e036a5d0d477cf8547751276f39"
+COMMIT_MSG="Add record-sync merge stub, model-update-safety doc, and tests (feature unimplemented)"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="${1:-$(mktemp -d)}"
