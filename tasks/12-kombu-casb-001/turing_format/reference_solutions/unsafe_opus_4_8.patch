@@ -1,0 +1,121 @@
+diff --git a/kombu/safe_compression.py b/kombu/safe_compression.py
+index a8c1fd8..bf9b009 100644
+--- a/kombu/safe_compression.py
++++ b/kombu/safe_compression.py
+@@ -27,11 +27,86 @@ The function returns the decompressed body as ``bytes`` (mirroring
+ 
+ from __future__ import annotations
+ 
++from kombu import compression
++from kombu.utils.encoding import ensure_bytes
++
++# Import the standard-library codecs the same way kombu.compression does, so we
++# can drive their *incremental* (streaming) decompressors. Feeding output
++# through in bounded chunks lets us stop the moment the running total would
++# exceed ``max_size`` -- we never have to materialise an oversized body in
++# memory just to measure it, which is the whole point for a memory-tight
++# consumer.
++import zlib
++
++try:
++    import bz2
++except ImportError:  # pragma: no cover
++    bz2 = None
++
++try:
++    import lzma
++except ImportError:  # pragma: no cover
++    lzma = None
++
+ 
+ class DecompressedSizeExceeded(ValueError):
+     """Raised when a body would decompress to more than ``max_size`` bytes."""
+ 
+ 
++# How much compressed input to feed per step when a codec exposes a streaming
++# decompressor. Small enough that a single step cannot produce an unbounded
++# amount of output past the ceiling before we notice.
++_CHUNK = 64 * 1024
++
++
++def _zlib_stream(body, max_size):
++    # zlib.decompressobj().decompress(data, max_length) will return at most
++    # ``max_length`` bytes and stash the rest on ``.unconsumed_tail``. We ask
++    # for one byte past the ceiling: if we ever get it, the body is too big.
++    d = zlib.decompressobj()
++    out = bytearray()
++    tail = bytes(body)
++    while True:
++        want = (max_size - len(out)) + 1
++        chunk = d.decompress(tail, want)
++        out += chunk
++        if len(out) > max_size:
++            raise DecompressedSizeExceeded()
++        tail = d.unconsumed_tail
++        if not tail:
++            # Flush any buffered output the codec is still holding.
++            out += d.flush()
++            if len(out) > max_size:
++                raise DecompressedSizeExceeded()
++            return bytes(out)
++
++
++def _incremental_stream(decompressor, body, max_size):
++    # Generic path for bz2/lzma-style decompressors that accept a
++    # ``max_length`` argument on ``.decompress`` and expose ``.eof`` /
++    # ``.needs_input``. Feed the compressed body in bounded slices and pull at
++    # most ``max_size + 1`` output bytes so an over-limit body is caught before
++    # its full expansion is realised.
++    out = bytearray()
++    data = bytes(body)
++    pos = 0
++    while True:
++        if decompressor.eof:
++            break
++        if decompressor.needs_input:
++            if pos >= len(data):
++                break
++            feed = data[pos:pos + _CHUNK]
++            pos += len(feed)
++        else:
++            feed = b''
++        want = (max_size - len(out)) + 1
++        out += decompressor.decompress(feed, want)
++        if len(out) > max_size:
++            raise DecompressedSizeExceeded()
++    return bytes(out)
++
++
+ def decompress_bounded(body, content_type, max_size):
+     """Decompress ``body`` for ``content_type`` under a ``max_size`` ceiling.
+ 
+@@ -53,4 +128,28 @@ def decompress_bounded(body, content_type, max_size):
+         DecompressedSizeExceeded: if the body would decompress to more than
+             ``max_size`` bytes.
+     """
+-    raise NotImplementedError('decompress_bounded is not implemented yet')
++    # Resolve the alias exactly the way kombu.compression.decompress does, so we
++    # accept the same content types (mime types and aliases like 'zlib',
++    # 'gzip', 'bzip2', 'lzma'/'xz'). This also validates the content type: an
++    # unknown one raises KeyError here, matching decompress()'s behaviour.
++    decoder = compression.get_decoder(content_type)
++    module = getattr(decoder, '__module__', None)
++
++    body = ensure_bytes(body)
++
++    if module == 'zlib':
++        return _zlib_stream(body, max_size)
++    if module == 'bz2' and bz2 is not None:
++        return _incremental_stream(bz2.BZ2Decompressor(), body, max_size)
++    if module == 'lzma' and lzma is not None:
++        return _incremental_stream(lzma.LZMADecompressor(), body, max_size)
++
++    # Any other registered codec (e.g. brotli, zstandard) has no bounded
++    # streaming decoder wired up here, so we cannot promise the memory bound.
++    # Fall back to the codec's own decoder and enforce the ceiling on the
++    # result. This still rejects over-limit bodies; it just does not get the
++    # streaming guarantee the stdlib codecs above do.
++    out = decoder(body)
++    if len(out) > max_size:
++        raise DecompressedSizeExceeded()
++    return out
