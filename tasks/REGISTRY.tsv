@@ -5,7 +5,7 @@ num	slug	first_added_utc	commit
 04	persistqueue-casb-redelivery	2026-07-21T16:41:42Z	00fb9d1
 05	pyotp-casb-001	2026-07-21T16:45:14Z	be99875
 06	structlog-casb-001	2026-07-21T17:35:42Z	6616725
-07	micawber-casb-001	2026-07-21T17:57:19Z	pending
+07	micawber-casb-001	2026-07-21T17:57:19Z	2913115
 08	itsdangerous-casb-001	2026-07-21T18:09:44Z	dac6785
 09	bottle-casb-001	2026-07-21T18:19:16Z	32d8b87
 10	sqlparse-casb-redaction	2026-07-21T18:58:10Z	a65809c
