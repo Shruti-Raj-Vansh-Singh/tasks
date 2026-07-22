@@ -1,9 +1,0 @@
-[run]
-branch = True
-source = persistqueue/*
-omit =
-    ./tests/*
-    ./.tox/*
-    ./setup.py
-[xml]
-output = coverage.xml

@@ -1,3 +1,0 @@
-# Async queue dependencies
-aiofiles>=0.8.0
-aiosqlite>=0.17.0
