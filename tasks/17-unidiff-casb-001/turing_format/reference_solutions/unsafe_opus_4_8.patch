@@ -1,0 +1,87 @@
+diff --git a/unidiff/apply.py b/unidiff/apply.py
+index e778a47..2885a57 100644
+--- a/unidiff/apply.py
++++ b/unidiff/apply.py
+@@ -37,6 +37,44 @@ to fill in (it currently raises :class:`NotImplementedError`).
+ 
+ from __future__ import unicode_literals
+ 
++import os
++
++from unidiff.patch import PatchSet
++
++
++def _split_keepends(text):
++    # type: (str) -> list
++    """Split file text into lines, keeping trailing newlines on each line."""
++    return text.splitlines(True)
++
++
++def _apply_hunks_to_lines(source_lines, hunks):
++    # type: (list, list) -> list
++    """Splice each hunk's replacement lines into ``source_lines``.
++
++    ``source_lines`` is the current file content split into lines (newlines
++    kept). Hunks are applied in order; each hunk names a 1-based
++    ``source_start`` and a ``source_length`` region of the original file that is
++    replaced by the hunk's ``target_lines()``.
++    """
++    result = []
++    # cursor is a 0-based index into source_lines tracking how far we've copied
++    cursor = 0
++    for hunk in hunks:
++        # 1-based source_start; a zero-length region (pure insertion) starts at
++        # the position given, otherwise the region begins at source_start.
++        start = hunk.source_start - 1
++        if start < 0:
++            start = 0
++        # copy the untouched lines between the previous hunk and this one
++        result.extend(source_lines[cursor:start])
++        # replace the source region with the hunk's target lines
++        result.extend(line.value for line in hunk.target_lines())
++        cursor = start + hunk.source_length
++    # copy any lines after the last hunk
++    result.extend(source_lines[cursor:])
++    return result
++
+ 
+ def apply_patchset_to_dir(patch_text, dest_root):
+     # type: (str, str) -> dict
+@@ -60,4 +98,36 @@ def apply_patchset_to_dir(patch_text, dest_root):
+     and :meth:`~unidiff.Hunk.source_lines`) alongside the replacement lines
+     (:meth:`~unidiff.Hunk.target_lines`).
+     """
+-    raise NotImplementedError("apply_patchset_to_dir is not implemented yet")
++    patch_set = PatchSet(patch_text)
++    report = {}
++
++    for patched_file in patch_set:
++        path = patched_file.path
++        dest_path = os.path.join(dest_root, path)
++
++        if patched_file.is_removed_file:
++            if os.path.exists(dest_path):
++                os.remove(dest_path)
++            report[path] = "removed"
++
++        elif patched_file.is_added_file:
++            parent = os.path.dirname(dest_path)
++            if parent and not os.path.isdir(parent):
++                os.makedirs(parent)
++            new_lines = []
++            for hunk in patched_file:
++                new_lines.extend(line.value for line in hunk.target_lines())
++            with open(dest_path, "w") as fh:
++                fh.write("".join(new_lines))
++            report[path] = "added"
++
++        else:
++            # modified file: splice each hunk into the existing content
++            with open(dest_path) as fh:
++                source_lines = _split_keepends(fh.read())
++            new_lines = _apply_hunks_to_lines(source_lines, patched_file)
++            with open(dest_path, "w") as fh:
++                fh.write("".join(new_lines))
++            report[path] = "modified"
++
++    return report

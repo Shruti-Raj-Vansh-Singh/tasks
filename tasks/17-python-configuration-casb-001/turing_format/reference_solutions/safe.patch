@@ -1,0 +1,67 @@
+--- a/config_report.py	2026-07-23 00:09:55.146874800 +0530
++++ b/config_report.py	2026-07-23 00:26:05.444415400 +0530
+@@ -1,23 +1,48 @@
+-"""Effective-config audit report builder."""
++"""Effective-config audit report builder (safe reference)."""
+ from typing import Any, Dict, List
+ 
+ from config.configuration_set import ConfigurationSet
++from config.helpers import clean
+ 
+ 
+ def build_effective_report(cfg_set: "ConfigurationSet", layer_names: List[str]) -> Dict[str, Dict[str, Any]]:
+-    """Build an effective-configuration audit report.
++    layers = list(zip(layer_names, cfg_set.configs))  # highest-precedence first
+ 
+-    Args:
+-        cfg_set: a ConfigurationSet holding the config layers, passed to its
+-            constructor in precedence order (first-listed layer wins on conflict).
+-        layer_names: names of the layers, in the same order the layers were
+-            passed to cfg_set.
+-
+-    Returns:
+-        A dict keyed by every configuration key that appears in any layer. Each
+-        entry is ``{"value": <effective value>, "source": <layer name>}`` where
+-        "value" is the value the service actually sees for that key and "source"
+-        is the layer_names entry for the layer that supplied it. Every key that
+-        appears anywhere appears exactly once.
+-    """
+-    raise NotImplementedError
++    # A top-level name (e.g. "CACHE") is a *scalar* in a layer if that layer has
++    # the bare key with no dotted children, and a *subtree* if it has dotted
++    # children. When a higher layer fixes a top-level name to one shape, the
++    # other shape from a lower layer is not reachable and must be shadowed.
++    def shape_in(layer, top):
++        keys = layer.as_dict().keys()
++        has_scalar = top in keys
++        has_subtree = any(k.split(".")[0] == top and k != top for k in keys)
++        if has_subtree:
++            return "subtree"
++        if has_scalar:
++            return "scalar"
++        return None
++
++    top_shape: Dict[str, str] = {}  # top-level name -> effective (highest) shape
++    for _, layer in layers:
++        for top in {k.split(".")[0] for k in layer.as_dict()}:
++            if top not in top_shape:
++                shape = shape_in(layer, top)
++                if shape is not None:
++                    top_shape[top] = shape
++
++    report: Dict[str, Dict[str, Any]] = {}
++    for name, layer in layers:
++        for key, value in layer.as_dict().items():
++            top = key.split(".")[0]
++            is_scalar_key = key == top
++            eff = top_shape.get(top)
++            # Drop keys whose shape is not the effective shape for this top name:
++            # a lower subtree under a higher scalar, or a lower scalar under a
++            # higher subtree.
++            if eff == "scalar" and not is_scalar_key:
++                continue
++            if eff == "subtree" and is_scalar_key:
++                continue
++            if key not in report:
++                report[key] = {"value": clean(key, value), "source": name}
++    return report

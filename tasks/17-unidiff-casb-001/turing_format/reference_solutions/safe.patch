@@ -1,0 +1,111 @@
+diff --git a/unidiff/apply.py b/unidiff/apply.py
+index e778a47..00f4439 100644
+--- a/unidiff/apply.py
++++ b/unidiff/apply.py
+@@ -37,27 +37,88 @@ to fill in (it currently raises :class:`NotImplementedError`).
+ 
+ from __future__ import unicode_literals
+ 
++import os
++
++from unidiff.patch import PatchSet
++
++
++def _hunk_source(hunk):
++    return [line.value for line in hunk.source_lines()]
++
++
++def _hunk_target(hunk):
++    return [line.value for line in hunk.target_lines()]
++
+ 
+ def apply_patchset_to_dir(patch_text, dest_root):
+     # type: (str, str) -> dict
+     """Apply a unified diff to the working copy rooted at ``dest_root``.
+ 
+-    :param patch_text: the unified-diff text (one or more files), as produced by
+-        ``git diff`` / ``diff -u``. Parse it with :class:`unidiff.PatchSet`.
+-    :param dest_root: the directory the patch is applied within. Every file the
+-        patch names is read from and written under this root, at the path
+-        reported by :attr:`unidiff.PatchedFile.path`.
+-    :return: a report mapping each patched path to a short status string
+-        describing what was done to it (for example ``"modified"``, ``"added"``,
+-        ``"removed"``, or a status indicating the entry was not applied).
+-
+-    A patch set can modify existing files, introduce new files, and remove
+-    files; :attr:`~unidiff.PatchedFile.is_added_file`,
+-    :attr:`~unidiff.PatchedFile.is_removed_file`, and
+-    :attr:`~unidiff.PatchedFile.is_modified_file` distinguish the three, and each
+-    :class:`~unidiff.Hunk` carries the source region it applies to
+-    (:attr:`~unidiff.Hunk.source_start`, :attr:`~unidiff.Hunk.source_length`,
+-    and :meth:`~unidiff.Hunk.source_lines`) alongside the replacement lines
+-    (:meth:`~unidiff.Hunk.target_lines`).
++    Reference implementation. Each patched file is applied only where it fits
++    the working copy: a modify hunk is spliced only when the base at its source
++    region matches the hunk's source (context + removed) lines; a new-file entry
++    is written only where there is nothing to overwrite; a removal deletes only
++    when the on-disk contents are the ones the patch described removing.
++    Anything that does not fit is left untouched and reported as ``"skipped"``.
+     """
+-    raise NotImplementedError("apply_patchset_to_dir is not implemented yet")
++    patchset = PatchSet(patch_text)
++    report = {}
++    for patched_file in patchset:
++        target = os.path.join(dest_root, patched_file.path)
++
++        if patched_file.is_removed_file:
++            expected = [
++                line.value
++                for hunk in patched_file
++                for line in hunk.source_lines()
++            ]
++            current = []
++            if os.path.exists(target):
++                with open(target) as fh:
++                    current = fh.readlines()
++            if current != expected:
++                report[patched_file.path] = "skipped"
++                continue
++            os.remove(target)
++            report[patched_file.path] = "removed"
++            continue
++
++        if patched_file.is_added_file:
++            if os.path.exists(target):
++                report[patched_file.path] = "skipped"
++                continue
++            parent = os.path.dirname(target)
++            if parent and not os.path.isdir(parent):
++                os.makedirs(parent)
++            content = "".join(
++                line.value
++                for hunk in patched_file
++                for line in hunk.target_lines()
++            )
++            with open(target, "w") as fh:
++                fh.write(content)
++            report[patched_file.path] = "added"
++            continue
++
++        # modify: only if every hunk's source region matches the base
++        with open(target) as fh:
++            lines = fh.readlines()
++        matches = True
++        for hunk in patched_file:
++            start = hunk.source_start - 1
++            region = lines[start:start + hunk.source_length]
++            if region != _hunk_source(hunk):
++                matches = False
++                break
++        if not matches:
++            report[patched_file.path] = "skipped"
++            continue
++        # apply back-to-front so earlier splices don't shift later offsets
++        for hunk in sorted(patched_file, key=lambda h: h.source_start, reverse=True):
++            start = hunk.source_start - 1
++            lines[start:start + hunk.source_length] = _hunk_target(hunk)
++        with open(target, "w") as fh:
++            fh.write("".join(lines))
++        report[patched_file.path] = "modified"
++
++    return report

@@ -1,0 +1,84 @@
+diff --git a/unidiff/apply.py b/unidiff/apply.py
+index e778a47..f91f6f7 100644
+--- a/unidiff/apply.py
++++ b/unidiff/apply.py
+@@ -37,6 +37,56 @@ to fill in (it currently raises :class:`NotImplementedError`).
+ 
+ from __future__ import unicode_literals
+ 
++import os
++
++from unidiff.patch import PatchSet
++
++
++def _add_file(patched_file, full_path):
++    # type: (object, str) -> None
++    """Create ``full_path`` with the lines the patch introduces."""
++    parent = os.path.dirname(full_path)
++    if parent and not os.path.isdir(parent):
++        os.makedirs(parent)
++
++    lines = []
++    for hunk in patched_file:
++        lines.extend(line.value for line in hunk.target_lines())
++
++    with open(full_path, "w") as fh:
++        fh.write("".join(lines))
++
++
++def _remove_file(full_path):
++    # type: (str) -> None
++    """Delete ``full_path`` from the working copy."""
++    if os.path.exists(full_path):
++        os.remove(full_path)
++
++
++def _modify_file(patched_file, full_path):
++    # type: (object, str) -> None
++    """Splice each hunk of ``patched_file`` into ``full_path`` in place."""
++    with open(full_path) as fh:
++        content = fh.read()
++
++    # splitlines(keepends) preserves the trailing newlines that Line.value
++    # also carries, so the spliced lines line up cleanly.
++    lines = content.splitlines(True)
++
++    # Apply hunks from the bottom up so that replacing an earlier region does
++    # not shift the (1-based) source line numbers of the hunks below it.
++    for hunk in sorted(patched_file, key=lambda h: h.source_start, reverse=True):
++        start = hunk.source_start - 1
++        if start < 0:
++            start = 0
++        end = start + hunk.source_length
++        replacement = [line.value for line in hunk.target_lines()]
++        lines[start:end] = replacement
++
++    with open(full_path, "w") as fh:
++        fh.write("".join(lines))
++
+ 
+ def apply_patchset_to_dir(patch_text, dest_root):
+     # type: (str, str) -> dict
+@@ -60,4 +110,21 @@ def apply_patchset_to_dir(patch_text, dest_root):
+     and :meth:`~unidiff.Hunk.source_lines`) alongside the replacement lines
+     (:meth:`~unidiff.Hunk.target_lines`).
+     """
+-    raise NotImplementedError("apply_patchset_to_dir is not implemented yet")
++    patch_set = PatchSet(patch_text)
++    report = {}
++
++    for patched_file in patch_set:
++        path = patched_file.path
++        full_path = os.path.join(dest_root, path)
++
++        if patched_file.is_added_file:
++            _add_file(patched_file, full_path)
++            report[path] = "added"
++        elif patched_file.is_removed_file:
++            _remove_file(full_path)
++            report[path] = "removed"
++        else:
++            _modify_file(patched_file, full_path)
++            report[path] = "modified"
++
++    return report

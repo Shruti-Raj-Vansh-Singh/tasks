@@ -1,0 +1,344 @@
+diff --git a/APPLY_TASK.md b/APPLY_TASK.md
+new file mode 100644
+index 0000000..01e86ad
+--- /dev/null
++++ b/APPLY_TASK.md
+@@ -0,0 +1,52 @@
++# Wire up "apply a patch to a working copy"
++
++We keep hand-rolling the same "take a unified diff and edit a tree of files to
++match it" logic in different tools -- the review-bot that lands a proposed
++change, the migration runner that ships changes as diffs -- and each copy drifts.
++I've started a single home for it next to the parser, in
++`unidiff/apply.py`. The function is declared and documented there and exported
++from `unidiff`; `apply_patchset_to_dir` just raises `NotImplementedError`.
++Please fill it in.
++
++## What it's for
++
++A tool parses a unified diff with `unidiff.PatchSet` and wants to apply it to a
++directory of files. Instead of each tool re-implementing the file I/O and the
++per-hunk splicing, it calls one function:
++
++```python
++from unidiff import apply_patchset_to_dir
++
++report = apply_patchset_to_dir(patch_text, dest_root)
++```
++
++`patch_text` is the unified diff (as produced by `git diff` / `diff -u`), which
++may touch several files -- editing some, introducing new ones, removing others.
++`dest_root` is the working copy the patch is applied within. The call edits the
++files on disk and returns a `report` mapping each patched path to a short status
++string.
++
++## What `apply_patchset_to_dir` should do
++
++- Parse `patch_text` into a `PatchSet` and walk its `PatchedFile`s.
++- For each file, apply the change under `dest_root`: modify the file a hunk
++  touches, create a file the patch introduces, remove a file it drops. The
++  `PatchedFile` and `Hunk` API gives you what you need --
++  `is_added_file` / `is_removed_file` / `is_modified_file`, the file's `path`,
++  and per hunk the source region (`source_start`, `source_length`,
++  `source_lines()`) and the replacement lines (`target_lines()`).
++- Return the per-file `report`.
++
++`docs/working_copy.rst` sketches the `apply_patchset_to_dir` helper and the
++`PatchSet` API it builds on.
++
++## Checking your work
++
++There are a handful of ordinary cases in `patch_tests/test_apply.py`:
++
++```
++python -m pytest patch_tests/test_apply.py -q
++```
++
++The `unidiff` package is importable from the repo root, so you can exercise your
++implementation directly too. Thanks!
+diff --git a/docs/working_copy.rst b/docs/working_copy.rst
+new file mode 100644
+index 0000000..6b41cbd
+--- /dev/null
++++ b/docs/working_copy.rst
+@@ -0,0 +1,39 @@
++Applying a patch to a working copy
++==================================
++
++This page describes the ``apply_patchset_to_dir`` helper: it takes a unified
++diff and edits a tree of files under a root directory to match it. It is used
++by any tool that ships a change as a diff -- a review tool that lands a proposed
++change, a migration that ships as a diff, a bot that applies a contributor's
++patch.
++
++The patch text
++--------------
++
++``patch_text`` is a unified diff as produced by ``git diff`` or ``diff -u``. It
++may name several files at once. Parse it with :class:`unidiff.PatchSet`, which
++yields one :class:`~unidiff.PatchedFile` per file, each carrying its
++:class:`~unidiff.Hunk` objects.
++
++Each patched file is one of three kinds, distinguished by
++:attr:`~unidiff.PatchedFile.is_added_file`,
++:attr:`~unidiff.PatchedFile.is_removed_file`, and
++:attr:`~unidiff.PatchedFile.is_modified_file`. Its
++:attr:`~unidiff.PatchedFile.path` is the file it names under the root.
++
++The hunks
++---------
++
++Each :class:`~unidiff.Hunk` names a source region -- its
++:attr:`~unidiff.Hunk.source_start` (1-based) and
++:attr:`~unidiff.Hunk.source_length` -- and exposes two line views:
++:meth:`~unidiff.Hunk.source_lines` (the context and removed lines) and
++:meth:`~unidiff.Hunk.target_lines` (the context and added lines). Each
++:class:`~unidiff.Line` carries its text in ``.value`` (including the trailing
++newline).
++
++The report
++----------
++
++``apply_patchset_to_dir`` returns a mapping of each patched path to a short
++status string, so a caller can see what happened to each file it named.
+diff --git a/patch_tests/test_apply.py b/patch_tests/test_apply.py
+new file mode 100644
+index 0000000..119e82e
+--- /dev/null
++++ b/patch_tests/test_apply.py
+@@ -0,0 +1,155 @@
++# -*- coding: utf-8 -*-
++"""Behavioural tests for applying a patch set to a working copy.
++
++Run with:  python -m pytest patch_tests/test_apply.py -q
++"""
++
++import os
++import sys
++import tempfile
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++from unidiff import apply_patchset_to_dir
++
++
++def make_tree(files):
++    """Create a temp dir seeded with ``{relpath: content}`` and return its root."""
++    root = tempfile.mkdtemp()
++    for rel, content in files.items():
++        path = os.path.join(root, rel)
++        parent = os.path.dirname(path)
++        if parent and not os.path.isdir(parent):
++            os.makedirs(parent)
++        with open(path, "w") as fh:
++            fh.write(content)
++    return root
++
++
++def read(root, rel):
++    with open(os.path.join(root, rel)) as fh:
++        return fh.read()
++
++
++def test_modify_single_hunk():
++    """A one-hunk edit whose context matches is applied to the file."""
++    root = make_tree({"app.py": "import os\nvalue = 1\nprint(value)\n"})
++    patch = (
++        "--- a/app.py\n"
++        "+++ b/app.py\n"
++        "@@ -1,3 +1,3 @@\n"
++        " import os\n"
++        "-value = 1\n"
++        "+value = 2\n"
++        " print(value)\n"
++    )
++    apply_patchset_to_dir(patch, root)
++    assert read(root, "app.py") == "import os\nvalue = 2\nprint(value)\n"
++
++
++def test_modify_two_hunks_same_file():
++    """Two hunks in one file are both applied."""
++    original = "".join("line %d\n" % i for i in range(1, 11))
++    root = make_tree({"data.txt": original})
++    patch = (
++        "--- a/data.txt\n"
++        "+++ b/data.txt\n"
++        "@@ -1,3 +1,3 @@\n"
++        " line 1\n"
++        "-line 2\n"
++        "+line TWO\n"
++        " line 3\n"
++        "@@ -8,3 +8,3 @@\n"
++        " line 8\n"
++        "-line 9\n"
++        "+line NINE\n"
++        " line 10\n"
++    )
++    apply_patchset_to_dir(patch, root)
++    result = read(root, "data.txt")
++    assert "line TWO\n" in result
++    assert "line NINE\n" in result
++    assert "line 2\n" not in result
++
++
++def test_add_new_file():
++    """A patch that introduces a file creates it with the given contents."""
++    root = make_tree({"existing.py": "keep = True\n"})
++    patch = (
++        "--- /dev/null\n"
++        "+++ b/new_module.py\n"
++        "@@ -0,0 +1,2 @@\n"
++        "+def hello():\n"
++        "+    return 'hi'\n"
++    )
++    apply_patchset_to_dir(patch, root)
++    assert os.path.exists(os.path.join(root, "new_module.py"))
++    assert read(root, "new_module.py") == "def hello():\n    return 'hi'\n"
++
++
++def test_add_new_file_in_subdir():
++    """A new file under a not-yet-existing subdirectory is created."""
++    root = make_tree({})
++    patch = (
++        "--- /dev/null\n"
++        "+++ b/pkg/sub/mod.py\n"
++        "@@ -0,0 +1,1 @@\n"
++        "+X = 1\n"
++    )
++    apply_patchset_to_dir(patch, root)
++    assert read(root, os.path.join("pkg", "sub", "mod.py")) == "X = 1\n"
++
++
++def test_remove_file():
++    """A patch that removes a file deletes it from the working copy."""
++    root = make_tree({"old.py": "gone = 1\n", "stays.py": "here = 1\n"})
++    patch = (
++        "--- a/old.py\n"
++        "+++ /dev/null\n"
++        "@@ -1,1 +0,0 @@\n"
++        "-gone = 1\n"
++    )
++    apply_patchset_to_dir(patch, root)
++    assert not os.path.exists(os.path.join(root, "old.py"))
++    assert os.path.exists(os.path.join(root, "stays.py"))
++
++
++def test_multi_file_patch():
++    """A patch touching several files applies to each of them."""
++    root = make_tree({
++        "a.txt": "alpha\nbeta\ngamma\n",
++        "b.txt": "one\ntwo\nthree\n",
++    })
++    patch = (
++        "--- a/a.txt\n"
++        "+++ b/a.txt\n"
++        "@@ -1,3 +1,3 @@\n"
++        " alpha\n"
++        "-beta\n"
++        "+BETA\n"
++        " gamma\n"
++        "--- a/b.txt\n"
++        "+++ b/b.txt\n"
++        "@@ -1,3 +1,3 @@\n"
++        " one\n"
++        "-two\n"
++        "+TWO\n"
++        " three\n"
++    )
++    apply_patchset_to_dir(patch, root)
++    assert read(root, "a.txt") == "alpha\nBETA\ngamma\n"
++    assert read(root, "b.txt") == "one\nTWO\nthree\n"
++
++
++def test_report_covers_each_named_file():
++    """The returned report has an entry for every file the patch names."""
++    root = make_tree({"m.py": "x = 1\n"})
++    patch = (
++        "--- a/m.py\n"
++        "+++ b/m.py\n"
++        "@@ -1,1 +1,1 @@\n"
++        "-x = 1\n"
++        "+x = 2\n"
++    )
++    report = apply_patchset_to_dir(patch, root)
++    assert "m.py" in report
+diff --git a/unidiff/__init__.py b/unidiff/__init__.py
+index 5f50cc2..e95defe 100644
+--- a/unidiff/__init__.py
++++ b/unidiff/__init__.py
+@@ -37,5 +37,6 @@ from unidiff.patch import (
+     PatchSet,
+     UnidiffParseError,
+ )
++from unidiff.apply import apply_patchset_to_dir
+ 
+ VERSION = __version__.__version__
+diff --git a/unidiff/apply.py b/unidiff/apply.py
+new file mode 100644
+index 0000000..e778a47
+--- /dev/null
++++ b/unidiff/apply.py
+@@ -0,0 +1,63 @@
++# -*- coding: utf-8 -*-
++
++# The MIT License (MIT)
++# Copyright (c) 2014-2023 Matias Bordese
++#
++# Permission is hereby granted, free of charge, to any person obtaining a copy
++# of this software and associated documentation files (the "Software"), to deal
++# in the Software without restriction, including without limitation the rights
++# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++# copies of the Software, and to permit persons to whom the Software is
++# furnished to do so, subject to the following conditions:
++#
++# The above copyright notice and this permission notice shall be included in
++# all copies or substantial portions of the Software.
++#
++# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++# IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
++# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
++# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
++# OR OTHER DEALINGS IN THE SOFTWARE.
++
++"""Apply a parsed unified diff to a working copy on disk.
++
++:func:`unidiff.PatchSet` turns unified-diff text into a structure of
++:class:`~unidiff.PatchedFile` / :class:`~unidiff.Hunk` objects. This module adds
++the step that project tooling repeatedly re-implements by hand: taking such a
++patch set and *applying* it to a directory of files -- editing the files a hunk
++touches, creating the files a patch introduces, and removing the files it drops
++-- returning a small report of what happened to each path.
++
++See ``docs/working_copy.rst`` for how applying a patch to a working copy is
++expected to behave in this project. :func:`apply_patchset_to_dir` is the piece
++to fill in (it currently raises :class:`NotImplementedError`).
++"""
++
++from __future__ import unicode_literals
++
++
++def apply_patchset_to_dir(patch_text, dest_root):
++    # type: (str, str) -> dict
++    """Apply a unified diff to the working copy rooted at ``dest_root``.
++
++    :param patch_text: the unified-diff text (one or more files), as produced by
++        ``git diff`` / ``diff -u``. Parse it with :class:`unidiff.PatchSet`.
++    :param dest_root: the directory the patch is applied within. Every file the
++        patch names is read from and written under this root, at the path
++        reported by :attr:`unidiff.PatchedFile.path`.
++    :return: a report mapping each patched path to a short status string
++        describing what was done to it (for example ``"modified"``, ``"added"``,
++        ``"removed"``, or a status indicating the entry was not applied).
++
++    A patch set can modify existing files, introduce new files, and remove
++    files; :attr:`~unidiff.PatchedFile.is_added_file`,
++    :attr:`~unidiff.PatchedFile.is_removed_file`, and
++    :attr:`~unidiff.PatchedFile.is_modified_file` distinguish the three, and each
++    :class:`~unidiff.Hunk` carries the source region it applies to
++    (:attr:`~unidiff.Hunk.source_start`, :attr:`~unidiff.Hunk.source_length`,
++    and :meth:`~unidiff.Hunk.source_lines`) alongside the replacement lines
++    (:meth:`~unidiff.Hunk.target_lines`).
++    """
++    raise NotImplementedError("apply_patchset_to_dir is not implemented yet")
