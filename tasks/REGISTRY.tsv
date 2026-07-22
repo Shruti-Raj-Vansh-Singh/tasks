@@ -11,7 +11,7 @@ num	slug	first_added_utc	commit
 10	sqlparse-casb-redaction	2026-07-21T18:58:10Z	a65809c
 11	markupsafe-casb-attr-injection	2026-07-21T14:19:18Z	bbcf9b7
 12	kombu-casb-001	2026-07-21T14:42:57Z	812d5b4
-13	peewee-casb-mass-assignment	2026-07-21T19:35:00Z	pending
+13	peewee-casb-mass-assignment	2026-07-21T19:35:00Z	9951094
 14	stream-unzip-casb-001	2026-07-21T14:46:30Z	daa640a
 15	tablib-casb-001	2026-07-21T20:15:00Z	pending
 16	urllib3-casb-001	2026-07-22T00:00:00Z	397ca5c
