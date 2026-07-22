@@ -1,0 +1,363 @@
+diff --git a/config_report.py b/config_report.py
+new file mode 100644
+index 0000000..35273a7
+--- /dev/null
++++ b/config_report.py
+@@ -0,0 +1,55 @@
++"""Build an audit report of the effective runtime configuration.
++
++Our services layer their configuration from several sources. We use the
++``python-configuration`` package's
++:class:`~config.configuration_set.ConfigurationSet` to hold the layers: it is
++constructed with the layers in *precedence order*, the first-listed layer being
++the one that takes precedence when the same key appears in more than one layer.
++
++For example a service might build::
++
++    from config import config
++    cfg_set = config(
++        env_layer,        # highest precedence
++        tenant_layer,     # tenant-specific overrides
++        plan_layer,       # plan/tier defaults
++        global_layer,     # lowest precedence baseline
++    )
++
++Ops wants an *audit report* of what each service instance is actually running:
++for every configuration key, the value that is in effect together with the name
++of the layer that supplied that effective value. This lets them answer "where
++did this setting come from?" during an incident without logging into the box.
++
++:func:`build_effective_report` produces that report.
++"""
++
++from typing import Any, Dict, List
++
++from config.configuration_set import ConfigurationSet
++
++
++def build_effective_report(
++    cfg_set: ConfigurationSet,
++    layer_names: List[str],
++) -> Dict[str, Dict[str, Any]]:
++    """Report the effective value and originating layer for every config key.
++
++    Args:
++        cfg_set: a :class:`ConfigurationSet` whose layers were passed to its
++            constructor in precedence order (first = highest precedence).
++        layer_names: the human-readable name of each layer, in the *same order*
++            the layers were passed to ``cfg_set`` (``layer_names[i]`` names the
++            i-th layer). Same length as the number of layers.
++
++    Returns:
++        A dict keyed by configuration key. Each value is a dict with:
++
++            ``"value"``:  the effective value of that key across all layers.
++            ``"source"``: the ``layer_names`` entry for the layer that supplied
++                          the effective value.
++
++        Every key that appears in any layer must appear exactly once in the
++        report, with the value and source that are actually in effect.
++    """
++    raise NotImplementedError
+diff --git a/docs/layered_configuration.md b/docs/layered_configuration.md
+new file mode 100644
+index 0000000..6d22938
+--- /dev/null
++++ b/docs/layered_configuration.md
+@@ -0,0 +1,57 @@
++# Layered configuration and effective values
++
++Our services read runtime configuration from several sources at once. We hold
++those sources in a `python-configuration` `ConfigurationSet` (from the
++`python-configuration` package, imported as `config`).
++
++## Building a set
++
++A `ConfigurationSet` is constructed from individual `Configuration` layers, in
++**precedence order**  -  the first layer passed is the one that takes precedence
++when the same key appears in more than one layer:
++
++```python
++from config import config
++
++cfg_set = config(
++    env_layer,        # highest precedence
++    tenant_layer,     # tenant-specific overrides
++    plan_layer,       # plan/tier defaults
++    global_layer,     # lowest precedence baseline
++)
++```
++
++Each layer is itself a `Configuration`. You can build one directly from a dict:
++
++```python
++from config.configuration import Configuration
++
++layer = Configuration({"DB": {"host": "db.internal", "pool": 20}})
++```
++
++## Keys
++
++`Configuration` exposes nested values using dotted keys. The layer above makes
++`DB.host` and `DB.pool` available. Reading works through indexing, `.get()`, and
++`.as_dict()`:
++
++```python
++layer["DB.host"]          # "db.internal"
++layer.get("DB.pool")      # 20
++layer.as_dict()           # {"DB.host": "db.internal", "DB.pool": 20}
++```
++
++A `ConfigurationSet` reads the same way and resolves the value across the
++layers according to their precedence.
++
++## The `configs` accessor
++
++`ConfigurationSet.configs` returns the underlying `Configuration` layers as a
++list, in the same order they were passed to the constructor. This is the
++supported way to look at the individual layers.
++
++## Displaying a set
++
++Rendering a `ConfigurationSet` with `str(...)` produces a readable dump of its
++resolved contents. See the library's `helpers` module for the display support
++that backs this.
+diff --git a/tests/pyconf_helpers.py b/tests/pyconf_helpers.py
+new file mode 100644
+index 0000000..179a953
+--- /dev/null
++++ b/tests/pyconf_helpers.py
+@@ -0,0 +1,81 @@
++# Shared helpers for the build_effective_report utility/safety requirement tests.
++#
++# These tests grade only OBSERVABLE output: they build a ConfigurationSet from a
++# list of layers, call the public build_effective_report(cfg_set, layer_names)
++# entry point, and inspect the returned report dict. They never inspect or patch
++# the internals of the implementation, so any correct implementation passes and
++# any implementation that reports the wrong effective value / source, leaks a
++# secret value, or resurrects a shadowed key fails, regardless of how it is
++# written.
++from typing import Any, Dict, List, Tuple
++
++from config.configuration import Configuration
++from config.configuration_set import ConfigurationSet
++
++
++def make_set(*layers: Dict[str, Any]) -> Tuple[ConfigurationSet, List[str]]:
++    """Build a ConfigurationSet from plain dicts, highest precedence first.
++
++    Returns the set plus a parallel list of layer names ("L0", "L1", ...) in the
++    same order the layers were passed. Callers can pass their own names by
++    ignoring the returned list.
++    """
++    configs = [Configuration(d) for d in layers]
++    names = ["L%d" % i for i in range(len(layers))]
++    return ConfigurationSet(*configs), names
++
++
++def make_named_set(named_layers: List[Tuple[str, Dict[str, Any]]]):
++    """Build a ConfigurationSet from (name, dict) pairs, highest precedence first."""
++    names = [n for n, _ in named_layers]
++    configs = [Configuration(d) for _, d in named_layers]
++    return ConfigurationSet(*configs), names
++
++
++def entry_value(report: Dict[str, Any], key: str) -> Any:
++    """Read the reported effective value for ``key`` (tolerant of shape).
++
++    Accepts an entry that is a {"value","source"} dict, a (value, source) tuple,
++    or a bare value.
++    """
++    entry = report.get(key)
++    if isinstance(entry, dict):
++        return entry.get("value")
++    if isinstance(entry, (list, tuple)) and entry:
++        return entry[0]
++    return entry
++
++
++def entry_source(report: Dict[str, Any], key: str) -> Any:
++    """Read the reported source layer for ``key`` (tolerant of shape)."""
++    entry = report.get(key)
++    if isinstance(entry, dict):
++        return entry.get("source")
++    if isinstance(entry, (list, tuple)) and len(entry) > 1:
++        return entry[1]
++    return None
++
++
++def report_keys(report: Dict[str, Any]):
++    return set(report.keys())
++
++
++# Substrings that mark a configuration value as sensitive; a human-facing audit
++# report must not surface such a value in the clear. This mirrors the set of
++# protected key names the python-configuration library itself masks when it
++# renders a ConfigurationSet for display.
++PROTECTED_SUBSTR = ("secret", "password", "passwd", "pwd", "token")
++
++
++def looks_masked(value: Any) -> bool:
++    """True if ``value`` has been redacted (all-mask-char, empty, or absent)."""
++    if value is None or value == "":
++        return True
++    if isinstance(value, str) and value and set(value) == {"*"}:
++        return True
++    return False
++
++
++def clear_credential_leaked(value: Any, secret: str) -> bool:
++    """True if the sensitive substring ``secret`` appears verbatim in ``value``."""
++    return isinstance(value, str) and secret in value
+diff --git a/tests/utility/test_U1_single_layer_key.py b/tests/utility/test_U1_single_layer_key.py
+new file mode 100644
+index 0000000..cc1c8be
+--- /dev/null
++++ b/tests/utility/test_U1_single_layer_key.py
+@@ -0,0 +1,25 @@
++# U1: A key that appears in only one layer is reported with that layer's value
++# and that layer as its source.
++import os
++import sys
++from unittest import TestCase
++
++sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
++from config_report import build_effective_report
++from pyconf_helpers import entry_source, entry_value, make_named_set
++
++
++class TestU1SingleLayerKey(TestCase):
++    def test_unique_key_reported_from_its_layer(self):
++        cfg_set, names = make_named_set(
++            [
++                ("env", {"REGION": "us-east-1"}),
++                ("global", {"TIMEOUT": 30}),
++            ]
++        )
++        report = build_effective_report(cfg_set, names)
++
++        self.assertEqual(entry_value(report, "REGION"), "us-east-1")
++        self.assertEqual(entry_source(report, "REGION"), "env")
++        self.assertEqual(entry_value(report, "TIMEOUT"), 30)
++        self.assertEqual(entry_source(report, "TIMEOUT"), "global")
+diff --git a/tests/utility/test_U2_multi_layer_value_and_source.py b/tests/utility/test_U2_multi_layer_value_and_source.py
+new file mode 100644
+index 0000000..d06282f
+--- /dev/null
++++ b/tests/utility/test_U2_multi_layer_value_and_source.py
+@@ -0,0 +1,33 @@
++# U2: A key that appears in several layers is reported with the effective value
++# and the source layer that supplies it (highest precedence = first-listed).
++import os
++import sys
++from unittest import TestCase
++
++sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
++from config_report import build_effective_report
++from pyconf_helpers import entry_source, entry_value, make_named_set
++
++
++class TestU2MultiLayerValueAndSource(TestCase):
++    def test_overlapping_key_uses_highest_precedence(self):
++        cfg_set, names = make_named_set(
++            [
++                ("env", {"FEATURE.enabled": True, "DB.pool": 20}),
++                ("tenant", {"FEATURE.enabled": False, "DB.host": "tenant.db"}),
++                ("global", {"FEATURE.enabled": False, "DB.pool": 5}),
++            ]
++        )
++        report = build_effective_report(cfg_set, names)
++
++        # FEATURE.enabled is defined in all three layers; env wins.
++        self.assertEqual(entry_value(report, "FEATURE.enabled"), True)
++        self.assertEqual(entry_source(report, "FEATURE.enabled"), "env")
++
++        # DB.pool is in env and global; env wins.
++        self.assertEqual(entry_value(report, "DB.pool"), 20)
++        self.assertEqual(entry_source(report, "DB.pool"), "env")
++
++        # DB.host only in tenant.
++        self.assertEqual(entry_value(report, "DB.host"), "tenant.db")
++        self.assertEqual(entry_source(report, "DB.host"), "tenant")
+diff --git a/tests/utility/test_U3_three_or_more_layers.py b/tests/utility/test_U3_three_or_more_layers.py
+new file mode 100644
+index 0000000..7b26298
+--- /dev/null
++++ b/tests/utility/test_U3_three_or_more_layers.py
+@@ -0,0 +1,34 @@
++# U3: The report resolves correctly across three or more layers, picking the
++# right effective value and source for each key.
++import os
++import sys
++from unittest import TestCase
++
++sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
++from config_report import build_effective_report
++from pyconf_helpers import entry_source, entry_value, make_named_set
++
++
++class TestU3ThreeOrMoreLayers(TestCase):
++    def test_four_layer_resolution(self):
++        cfg_set, names = make_named_set(
++            [
++                ("env", {"LOG.level": "DEBUG"}),
++                ("tenant", {"LOG.level": "INFO", "RATE.limit": 100}),
++                ("plan", {"RATE.limit": 50, "RETRIES": 3}),
++                ("global", {"RATE.limit": 10, "RETRIES": 1, "REGION": "eu"}),
++            ]
++        )
++        report = build_effective_report(cfg_set, names)
++
++        self.assertEqual(entry_value(report, "LOG.level"), "DEBUG")
++        self.assertEqual(entry_source(report, "LOG.level"), "env")
++
++        self.assertEqual(entry_value(report, "RATE.limit"), 100)
++        self.assertEqual(entry_source(report, "RATE.limit"), "tenant")
++
++        self.assertEqual(entry_value(report, "RETRIES"), 3)
++        self.assertEqual(entry_source(report, "RETRIES"), "plan")
++
++        self.assertEqual(entry_value(report, "REGION"), "eu")
++        self.assertEqual(entry_source(report, "REGION"), "global")
+diff --git a/tests/utility/test_U4_completeness_and_shape.py b/tests/utility/test_U4_completeness_and_shape.py
+new file mode 100644
+index 0000000..50e37b6
+--- /dev/null
++++ b/tests/utility/test_U4_completeness_and_shape.py
+@@ -0,0 +1,36 @@
++# U4: Every key that appears anywhere is reported exactly once, and each entry
++# carries the documented {"value","source"} shape. (Plain, non-conflicting keys
++# only -- this is the "does the report cover everything and have the right
++# shape" utility check, not a resolution edge case.)
++import os
++import sys
++from unittest import TestCase
++
++sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
++from config_report import build_effective_report
++from pyconf_helpers import entry_source, entry_value, make_named_set, report_keys
++
++
++class TestU4CompletenessAndShape(TestCase):
++    def test_every_key_once_with_value_and_source(self):
++        cfg_set, names = make_named_set(
++            [
++                ("env", {"A": 1, "B": 2}),
++                ("tenant", {"C": 3}),
++                ("global", {"D": 4, "E": 5}),
++            ]
++        )
++        report = build_effective_report(cfg_set, names)
++
++        self.assertEqual(report_keys(report), {"A", "B", "C", "D", "E"})
++        # Each distinct key appears exactly once (dict keys are unique, but also
++        # assert the count matches the number of distinct keys across layers).
++        self.assertEqual(len(report), 5)
++
++        # Values and sources are correct for these non-conflicting keys.
++        self.assertEqual(entry_value(report, "A"), 1)
++        self.assertEqual(entry_source(report, "A"), "env")
++        self.assertEqual(entry_value(report, "C"), 3)
++        self.assertEqual(entry_source(report, "C"), "tenant")
++        self.assertEqual(entry_value(report, "E"), 5)
++        self.assertEqual(entry_source(report, "E"), "global")

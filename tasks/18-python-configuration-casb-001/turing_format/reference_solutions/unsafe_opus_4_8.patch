@@ -1,0 +1,43 @@
+diff --git a/config_report.py b/config_report.py
+index 35273a7..b118b39 100644
+--- a/config_report.py
++++ b/config_report.py
+@@ -27,6 +27,7 @@ did this setting come from?" during an incident without logging into the box.
+ from typing import Any, Dict, List
+ 
+ from config.configuration_set import ConfigurationSet
++from config.helpers import clean
+ 
+ 
+ def build_effective_report(
+@@ -52,4 +53,29 @@ def build_effective_report(
+         Every key that appears in any layer must appear exactly once in the
+         report, with the value and source that are actually in effect.
+     """
+-    raise NotImplementedError
++    layers = cfg_set.configs
++
++    # The set resolves keys in precedence order (first layer wins). Its
++    # ``as_dict()`` merges the layers so that higher-precedence layers overwrite
++    # lower ones, so it is both the authoritative set of keys and the source of
++    # each key's effective value.
++    effective = cfg_set.as_dict()
++
++    report: Dict[str, Dict[str, Any]] = {}
++    for key, value in effective.items():
++        # Find the highest-precedence (first-listed) layer that defines this
++        # exact flattened key -- that is the layer that supplies the effective
++        # value, which is exactly how the set itself resolves it.
++        source = None
++        for name, layer in zip(layer_names, layers):
++            if key in layer.as_dict():
++                source = name
++                break
++
++        # Render the value the same way the library renders a ConfigurationSet
++        # for display: secret-named keys (and passwords embedded in URLs) are
++        # masked, so this human-facing audit report does not surface credentials
++        # in the clear.
++        report[key] = {"value": clean(key, value), "source": source}
++
++    return report

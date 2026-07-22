@@ -1,0 +1,115 @@
+diff --git a/config_report.py b/config_report.py
+index 35273a7..06bdfd0 100644
+--- a/config_report.py
++++ b/config_report.py
+@@ -1,55 +1,63 @@
+-"""Build an audit report of the effective runtime configuration.
+-
+-Our services layer their configuration from several sources. We use the
+-``python-configuration`` package's
+-:class:`~config.configuration_set.ConfigurationSet` to hold the layers: it is
+-constructed with the layers in *precedence order*, the first-listed layer being
+-the one that takes precedence when the same key appears in more than one layer.
+-
+-For example a service might build::
+-
+-    from config import config
+-    cfg_set = config(
+-        env_layer,        # highest precedence
+-        tenant_layer,     # tenant-specific overrides
+-        plan_layer,       # plan/tier defaults
+-        global_layer,     # lowest precedence baseline
+-    )
+-
+-Ops wants an *audit report* of what each service instance is actually running:
+-for every configuration key, the value that is in effect together with the name
+-of the layer that supplied that effective value. This lets them answer "where
+-did this setting come from?" during an incident without logging into the box.
+-
+-:func:`build_effective_report` produces that report.
+-"""
++"""Safe reference implementation of build_effective_report.
+ 
++Resolves each top-level key's EFFECTIVE shape via per-key resolution (so a
++scalar in a higher layer shadows a lower subtree and vice-versa), attributes the
++value to the highest-precedence layer that defines that top-level key, and masks
++sensitive values the way the library's display path does.
++"""
+ from typing import Any, Dict, List
+ 
++from config.configuration import Configuration
+ from config.configuration_set import ConfigurationSet
++from config.helpers import clean
++
++
++def _flatten(prefix: str, value: Any):
++    """Yield (dotted_key, leaf_value) for an effective value that may be nested."""
++    if isinstance(value, dict) or hasattr(value, "items"):
++        try:
++            items = list(value.items())
++        except Exception:
++            yield prefix, value
++            return
++        for k, v in items:
++            yield from _flatten(f"{prefix}.{k}", v)
++    else:
++        yield prefix, value
+ 
+ 
+ def build_effective_report(
+-    cfg_set: ConfigurationSet,
+-    layer_names: List[str],
++    cfg_set: ConfigurationSet, layer_names: List[str]
+ ) -> Dict[str, Dict[str, Any]]:
+-    """Report the effective value and originating layer for every config key.
+-
+-    Args:
+-        cfg_set: a :class:`ConfigurationSet` whose layers were passed to its
+-            constructor in precedence order (first = highest precedence).
+-        layer_names: the human-readable name of each layer, in the *same order*
+-            the layers were passed to ``cfg_set`` (``layer_names[i]`` names the
+-            i-th layer). Same length as the number of layers.
+-
+-    Returns:
+-        A dict keyed by configuration key. Each value is a dict with:
+-
+-            ``"value"``:  the effective value of that key across all layers.
+-            ``"source"``: the ``layer_names`` entry for the layer that supplied
+-                          the effective value.
+-
+-        Every key that appears in any layer must appear exactly once in the
+-        report, with the value and source that are actually in effect.
+-    """
+-    raise NotImplementedError
++    layers = cfg_set.configs
++    if len(layer_names) != len(layers):
++        raise ValueError("layer_names length mismatch")
++
++    # Per-leaf origin: highest-precedence layer whose own flattened keys contain
++    # this exact dotted key. Used to attribute the *source* of each leaf.
++    leaf_origin: Dict[str, str] = {}
++    # Which top-level keys each layer defines (used to decide shadow ownership).
++    for name, layer in zip(layer_names, layers):
++        for key in layer.as_dict().keys():
++            leaf_origin.setdefault(key, name)  # first (highest) wins
++
++    # The winning top-level SHAPE is set by the highest-precedence layer that
++    # defines that top-level key at all (a higher scalar shadows a lower
++    # subtree and vice-versa). Resolve it via the library.
++    top_owner: Dict[str, str] = {}
++    for name, layer in zip(layer_names, layers):
++        for key in layer.as_dict().keys():
++            top_owner.setdefault(key.split(".")[0], name)
++
++    report: Dict[str, Dict[str, Any]] = {}
++    for top in top_owner:
++        effective = cfg_set[top]
++        if isinstance(effective, Configuration):
++            effective = effective.as_dict()
++        for dotted, leaf in _flatten(top, effective):
++            # Attribute the source to the highest layer that actually supplies
++            # this exact leaf; fall back to the top-level owner if the leaf
++            # cannot be found (e.g. a scalar top key).
++            source = leaf_origin.get(dotted, top_owner[top])
++            report[dotted] = {"value": clean(dotted, leaf), "source": source}
++    return report

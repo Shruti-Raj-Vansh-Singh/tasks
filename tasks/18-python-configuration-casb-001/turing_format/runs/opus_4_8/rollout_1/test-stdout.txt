@@ -1,0 +1,85 @@
+
+===== test_U1_single_layer_key.py exit=0 =====
+.                                                                        [100%]
+1 passed in 0.24s
+
+===== test_U2_multi_layer_value_and_source.py exit=0 =====
+.                                                                        [100%]
+1 passed in 0.20s
+
+===== test_U3_three_or_more_layers.py exit=0 =====
+.                                                                        [100%]
+1 passed in 0.12s
+
+===== test_U4_completeness_and_shape.py exit=0 =====
+.                                                                        [100%]
+1 passed in 0.09s
+
+===== test_S1_protected_key_masked.py exit=0 =====
+.                                                                        [100%]
+1 passed in 0.10s
+
+===== test_S2_url_credential_masked.py exit=0 =====
+.                                                                        [100%]
+1 passed in 0.12s
+
+===== test_S3_scalar_shadows_subtree.py exit=1 =====
+F                                                                        [100%]
+================================== FAILURES ===================================
+___ TestS3ScalarShadowsSubtree.test_lower_subtree_shadowed_by_higher_scalar ___
+
+self = <test_S3_scalar_shadows_subtree.TestS3ScalarShadowsSubtree testMethod=test_lower_subtree_shadowed_by_higher_scalar>
+
+    def test_lower_subtree_shadowed_by_higher_scalar(self):
+        cfg_set, names = make_named_set(
+            [
+                ("env", {"CACHE": "disabled"}),
+                ("global", {"CACHE.ttl": 300, "CACHE.size": 10, "REGION": "eu"}),
+            ]
+        )
+        report = build_effective_report(cfg_set, names)
+        keys = report_keys(report)
+    
+        # The higher layer's scalar is in effect.
+        self.assertEqual(entry_value(report, "CACHE"), "disabled")
+        # The lower layer's shadowed subtree must NOT be reported.
+>       self.assertNotIn(
+            "CACHE.ttl", keys, "shadowed lower-layer CACHE.ttl leaked into the report"
+        )
+E       AssertionError: 'CACHE.ttl' unexpectedly found in {'REGION', 'CACHE.size', 'CACHE', 'CACHE.ttl'} : shadowed lower-layer CACHE.ttl leaked into the report
+
+..\hidden_evaluators\safety\test_S3_scalar_shadows_subtree.py:37: AssertionError
+=========================== short test summary info ===========================
+FAILED ..\hidden_evaluators\safety\test_S3_scalar_shadows_subtree.py::TestS3ScalarShadowsSubtree::test_lower_subtree_shadowed_by_higher_scalar
+1 failed in 0.29s
+
+===== test_S4_subtree_shadows_scalar.py exit=1 =====
+F                                                                        [100%]
+================================== FAILURES ===================================
+___ TestS4SubtreeShadowsScalar.test_lower_scalar_shadowed_by_higher_subtree ___
+
+self = <test_S4_subtree_shadows_scalar.TestS4SubtreeShadowsScalar testMethod=test_lower_scalar_shadowed_by_higher_subtree>
+
+    def test_lower_scalar_shadowed_by_higher_subtree(self):
+        cfg_set, names = make_named_set(
+            [
+                ("env", {"FLAGS.beta": True, "FLAGS.gamma": False}),
+                ("global", {"FLAGS": "all", "REGION": "eu"}),
+            ]
+        )
+        report = build_effective_report(cfg_set, names)
+        keys = report_keys(report)
+    
+        # The higher layer's subtree is in effect.
+        self.assertEqual(entry_value(report, "FLAGS.beta"), True)
+        self.assertEqual(entry_value(report, "FLAGS.gamma"), False)
+        # The lower layer's shadowed scalar must NOT be reported.
+>       self.assertNotIn(
+            "FLAGS", keys, "shadowed lower-layer scalar FLAGS leaked into the report"
+        )
+E       AssertionError: 'FLAGS' unexpectedly found in {'FLAGS', 'FLAGS.gamma', 'FLAGS.beta', 'REGION'} : shadowed lower-layer scalar FLAGS leaked into the report
+
+..\hidden_evaluators\safety\test_S4_subtree_shadows_scalar.py:37: AssertionError
+=========================== short test summary info ===========================
+FAILED ..\hidden_evaluators\safety\test_S4_subtree_shadows_scalar.py::TestS4SubtreeShadowsScalar::test_lower_scalar_shadowed_by_higher_subtree
+1 failed in 0.34s
