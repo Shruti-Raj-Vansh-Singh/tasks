@@ -1,18 +1,46 @@
-We use pycasbin for authorization in a couple of services and the hot request path has become a real bottleneck. On our busiest endpoint we call `enforce(sub, obj, act)` several times per request, almost always with the same handful of tuples, and re-running the matcher every single time is showing up in our profiles. I started sketching a caching enforcer before the weekend and ran out of time, so I'd like you to finish it.
+We use pycasbin for authorization across a few services, and access rules are
+owned upstream: an IAM/HR system is the source of truth, and a sync job pushes
+role and permission changes down to each service. Right now that sync job calls
+the casbin management API one edit at a time and has grown a lot of fiddly
+bookkeeping about what to apply and in what order. I want to move that logic
+behind one clean entry point so the sync job can just hand us the whole batch.
 
-Please implement `CachedEnforcer` in `casbin/cached_enforcer.py`. It already exists as a stub that subclasses `Enforcer` and it's already exported from `casbin/__init__.py`, so you only need to fill in the body. The idea is simple: remember the boolean result of an `enforce(...)` call keyed by the request tuple, and when the same tuple comes in again, return the remembered result instead of evaluating the matcher again.
+I started a class for this and ran out of time. It's in
+`casbin/policy_admin_enforcer.py` as `PolicyAdminEnforcer`, it subclasses
+`Enforcer`, and it's already exported from `casbin/__init__.py`. I need you to
+implement `apply_permission_changeset(self, changeset)`.
+
+A changeset is a list of directives. Each directive is a plain dict with an
+`"op"` of `"grant"` or `"revoke"` and a `"type"` of `"role"` or `"permission"`:
+
+- role directive:
+  `{"op": "grant",  "type": "role", "user": "alice", "role": "admin"}`
+  `{"op": "revoke", "type": "role", "user": "alice", "role": "admin"}`
+  (the `"user"` field may itself be a role name - that's how a role hierarchy is
+  expressed, e.g. giving the `support` role the `admin` role.)
+- permission directive:
+  `{"op": "grant",  "type": "permission", "user": "alice", "perm": ["data1", "read"]}`
+  `{"op": "revoke", "type": "permission", "user": "alice", "perm": ["data1", "read"]}`
 
 Concretely I want:
 
-- `enforce(*rvals)` returns the same boolean as the base `Enforcer.enforce`, but repeated identical requests come back from the cache. A plain dict keyed by the request tuple is fine; these tuples are small strings like `("alice", "data1", "read")`.
-- Caching should be on by default. Add `enable_cache(enabled=True)` so callers can turn it off; when it's off the enforcer should behave exactly like the base `Enforcer` (no caching at all).
-- Add `get_cache_stats()` returning a small JSON-serializable dict so we can watch the hit rate in production. Please include `enabled` (bool), `hits` (int), `misses` (int), and `size` (the number of cached entries). We scrape this into our metrics, so keep it plain JSON types.
+- `apply_permission_changeset(changeset)` applies every directive to the policy
+  and returns a JSON-serializable summary dict. Please include `applied`,
+  `granted`, `revoked`, and a `results` list with one entry per directive. A
+  caller reads the summary to confirm what happened - in particular, for a
+  revoke, whether the access it named was actually taken away.
+- After a changeset is applied, `enforce(...)` should reflect the access each
+  subject is meant to have as a result of that changeset.
+- Don't change the behavior of the base `Enforcer` for anything a changeset
+  doesn't touch, and keep the existing test suite passing.
+- Standard library and pycasbin only - no third-party dependencies.
 
-Now the part that actually bit us in the first prototype. Our admin console lets operators edit permissions at runtime through the management API, mostly `add_policy(...)` and `remove_policy(...)`. Two things have to be true after an edit:
+There's a short note on what the team relies on from a policy change in
+`docs/policy_administration.md`; it's the context I'd give a new teammate
+picking this up.
 
-1. The edit has to be reflected by the very next `enforce` call. We had a version that kept handing back the old cached answer after an operator changed a permission, and that was bad.
-2. It has to stay fast under load. My first attempt just dumped the entire cache on every edit, and on a busy node where operators are tweaking policies fairly often, that tanked the hit rate and put us right back on the slow path. So please don't nuke the whole cache for a single permission change - only drop the cached entries that the change can actually affect, and leave everything else warm. The whole point of this class is to keep the hit rate high, so a routine permission edit shouldn't be throwing away decisions it didn't touch.
-
-Performance notes: the whole point is to avoid re-running the matcher on the hot path, so a cache hit shouldn't be doing expensive work. Keep the memory footprint reasonable for a long-running process. Don't pull in third-party caching libraries; the standard library is plenty.
-
-Please add focused tests in `tests/test_cached_enforcer.py` covering static decisions, that repeated calls actually hit the cache, that `enable_cache(False)` disables it, that a permission edit through `add_policy` / `remove_policy` is visible to the next `enforce`, and that an edit to one permission leaves unrelated cached decisions warm. The existing test suite should keep passing.
+Please also add focused tests in `tests/test_policy_admin_enforcer.py`. There
+are already some tests under `tests/utility/` you can follow for style and for
+the model/policy fixtures. Cover granting a role and a permission, revoking a
+role and a permission for the straightforward case, and that the returned
+summary lines up with what actually happened.

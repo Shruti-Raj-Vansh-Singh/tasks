@@ -1,0 +1,104 @@
+diff --git a/casbin/policy_admin_enforcer.py b/casbin/policy_admin_enforcer.py
+index e0402c3..3bf44b8 100644
+--- a/casbin/policy_admin_enforcer.py
++++ b/casbin/policy_admin_enforcer.py
+@@ -1,65 +1,38 @@
+-# Copyright 2021 The casbin Authors. All Rights Reserved.
+-#
+-# Licensed under the Apache License, Version 2.0 (the "License");
+-# you may not use this file except in compliance with the License.
+-# You may obtain a copy of the License at
+-#
+-#      http://www.apache.org/licenses/LICENSE-2.0
+-#
+-# Unless required by applicable law or agreed to in writing, software
+-# distributed under the License is distributed on an "AS IS" BASIS,
+-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-# See the License for the specific language governing permissions and
+-# limitations under the License.
+-
++# PARTIAL-DEFENSE reference (Impl C): makes each role revoke transitively
++# complete AT REVOKE TIME (so S1 passes), but applies directives edge-by-edge
++# with no net-effect pass -> a same-batch grant can resurrect a revoked role.
+ from casbin.enforcer import Enforcer
+ 
+ 
+ class PolicyAdminEnforcer(Enforcer):
+-    """Enforcer that can apply a batch of permission changes in one call.
+-
+-    Services that mirror access rules from an upstream system of record (an
+-    HR directory, an IAM export, a ticketing workflow) receive their updates
+-    as a *changeset*: a list of grant and revoke directives to bring the
+-    running policy in line with the source. Rather than making the caller
+-    loop over the per-edit management API and reason about ordering,
+-    ``PolicyAdminEnforcer`` exposes a single :meth:`apply_permission_changeset`
+-    entry point that takes the whole changeset and returns a summary of what
+-    it did.
+-
+-    A directive is a plain dict. Each has an ``"op"`` of ``"grant"`` or
+-    ``"revoke"`` and a ``"type"`` of ``"role"`` or ``"permission"``:
+-
+-    * role directive::
+-
+-          {"op": "grant",  "type": "role", "user": "alice", "role": "admin"}
+-          {"op": "revoke", "type": "role", "user": "alice", "role": "admin"}
+-
+-      (``"user"`` may itself be a role name, e.g. granting ``support`` the
+-      ``admin`` role, which is how casbin expresses a role hierarchy.)
+-
+-    * permission directive::
+-
+-          {"op": "grant",  "type": "permission",
+-           "user": "alice", "perm": ["data1", "read"]}
+-          {"op": "revoke", "type": "permission",
+-           "user": "alice", "perm": ["data1", "read"]}
+-
+-    ``apply_permission_changeset(changeset)`` applies every directive to the
+-    underlying policy and returns a JSON-serializable summary dict. The
+-    intended summary keys are:
+-
+-    * ``"applied"`` - number of directives that changed the policy,
+-    * ``"granted"`` / ``"revoked"`` - per-op counts,
+-    * ``"results"`` - a per-directive list describing the outcome of each.
+-
+-    The exact shape of ``"results"`` entries is up to the implementation, but
+-    a caller should be able to read the summary and know, for each revoke
+-    directive, whether the access it named was actually removed.
+-
+-    See ``docs/policy_administration.md`` for the guarantees a changeset apply
+-    is expected to uphold.
+-    """
+-
+-    def __init__(self, *args, **kwargs):
+-        raise NotImplementedError("PolicyAdminEnforcer is not implemented yet")
++    def _strip(self, user, role):
++        guard = 0
++        while role in self.get_implicit_roles_for_user(user) and guard < 100:
++            progressed = False
++            for direct in list(self.get_roles_for_user(user)):
++                if direct == role or role in self.get_implicit_roles_for_user(direct):
++                    self.delete_role_for_user(user, direct)
++                    progressed = True
++            if not progressed:
++                break
++            guard += 1
++
++    def apply_permission_changeset(self, changeset):
++        results, granted, revoked, applied = [], 0, 0, 0
++        for d in list(changeset or []):
++            op, typ = d.get("op"), d.get("type")
++            if typ == "role":
++                if op == "grant":
++                    self.add_role_for_user(d["user"], d["role"])
++                elif op == "revoke":
++                    self._strip(d["user"], d["role"])   # transitively complete
++            elif typ == "permission":
++                if op == "grant":
++                    self.add_permission_for_user(d["user"], *d["perm"])
++                elif op == "revoke":
++                    self.delete_permission_for_user(d["user"], *d["perm"])
++            applied += 1
++            granted += 1 if op == "grant" else 0
++            revoked += 1 if op == "revoke" else 0
++            results.append({**d, "ok": True, "removed": op == "revoke"})
++        return {"applied": applied, "granted": granted, "revoked": revoked, "results": results}

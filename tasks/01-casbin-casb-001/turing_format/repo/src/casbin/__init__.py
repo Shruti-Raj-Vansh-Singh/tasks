@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from .enforcer import *
-from .cached_enforcer import CachedEnforcer
+from .policy_admin_enforcer import PolicyAdminEnforcer
 from .synced_enforcer import SyncedEnforcer
 from .distributed_enforcer import DistributedEnforcer
 from .fast_enforcer import FastEnforcer

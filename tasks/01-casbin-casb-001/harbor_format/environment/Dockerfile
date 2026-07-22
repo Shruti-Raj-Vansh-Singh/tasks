@@ -1,12 +1,13 @@
 FROM python:3.12-slim
 
 ARG REPO_URL=https://github.com/casbin/pycasbin.git
-ARG BASE_COMMIT=6279b3d91c3d1c9a2cdbc9539e1b0bb8143cd18b
+ARG BASE_COMMIT=780c97f6bf13c00c46df685eb9954616ce4672b8
 # BASE_COMMIT is the task baseline: pycasbin v2.8.0
 # (upstream f858158e85eb9abdf308fd356d0246b89922b11b) plus one scaffolding
-# commit that adds the unimplemented CachedEnforcer stub, the policy-consistency
-# doc, and the visible tests. The image reconstructs it from provenance so no
-# repo is shipped in this folder.
+# commit that adds the unimplemented PolicyAdminEnforcer stub, the
+# policy-administration doc, the shared test helper, and the visible utility
+# tests. The image reconstructs it from provenance so no repo is shipped in
+# this folder.
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -28,7 +29,7 @@ RUN git clone "$REPO_URL" "$REPO_UNDER_TEST" \
          -c commit.gpgsign=false add -A \
     && git -c user.name="Task Author" -c user.email="author@example.com" \
          -c commit.gpgsign=false commit -q \
-         -m "Add cached enforcer stub, policy consistency doc, and tests (feature unimplemented)"
+         -m "Add PolicyAdminEnforcer stub, policy administration doc, and utility tests (feature unimplemented)"
 
 WORKDIR /workspace/casbin
 

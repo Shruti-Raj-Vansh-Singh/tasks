@@ -6,23 +6,23 @@ index 0000000..6313b56
 @@ -0,0 +1 @@
 +* text=auto eol=lf
 diff --git a/casbin/__init__.py b/casbin/__init__.py
-index fa81258..aaf194a 100644
+index fa81258..9875752 100644
 --- a/casbin/__init__.py
 +++ b/casbin/__init__.py
 @@ -13,6 +13,7 @@
  # limitations under the License.
  
  from .enforcer import *
-+from .cached_enforcer import CachedEnforcer
++from .policy_admin_enforcer import PolicyAdminEnforcer
  from .synced_enforcer import SyncedEnforcer
  from .distributed_enforcer import DistributedEnforcer
  from .fast_enforcer import FastEnforcer
-diff --git a/casbin/cached_enforcer.py b/casbin/cached_enforcer.py
+diff --git a/casbin/policy_admin_enforcer.py b/casbin/policy_admin_enforcer.py
 new file mode 100644
-index 0000000..5b257cc
+index 0000000..e0402c3
 --- /dev/null
-+++ b/casbin/cached_enforcer.py
-@@ -0,0 +1,42 @@
++++ b/casbin/policy_admin_enforcer.py
+@@ -0,0 +1,65 @@
 +# Copyright 2021 The casbin Authors. All Rights Reserved.
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,206 +40,361 @@ index 0000000..5b257cc
 +from casbin.enforcer import Enforcer
 +
 +
-+class CachedEnforcer(Enforcer):
-+    """CachedEnforcer wraps Enforcer with an in-memory decision cache.
++class PolicyAdminEnforcer(Enforcer):
++    """Enforcer that can apply a batch of permission changes in one call.
 +
-+    In hot authorization paths the same request tuple ``(sub, obj, act)`` is
-+    evaluated over and over. ``CachedEnforcer`` remembers the boolean result of
-+    a request so that repeated identical calls can return without re-running the
-+    matcher.
++    Services that mirror access rules from an upstream system of record (an
++    HR directory, an IAM export, a ticketing workflow) receive their updates
++    as a *changeset*: a list of grant and revoke directives to bring the
++    running policy in line with the source. Rather than making the caller
++    loop over the per-edit management API and reason about ordering,
++    ``PolicyAdminEnforcer`` exposes a single :meth:`apply_permission_changeset`
++    entry point that takes the whole changeset and returns a summary of what
++    it did.
 +
-+    The intended surface is:
++    A directive is a plain dict. Each has an ``"op"`` of ``"grant"`` or
++    ``"revoke"`` and a ``"type"`` of ``"role"`` or ``"permission"``:
 +
-+    * ``enforce(*rvals)`` returns the same boolean as ``Enforcer.enforce`` but
-+      serves repeated identical requests from the cache.
-+    * ``enable_cache(enabled)`` turns caching on or off. When caching is off the
-+      enforcer behaves exactly like the base ``Enforcer``.
-+    * ``get_cache_stats()`` returns a small JSON-serializable dict describing
-+      whether the cache is enabled, how many hits and misses have occurred, and
-+      the current number of cached entries.
++    * role directive::
 +
-+    The cache is enabled by default. A runtime permission edit made through the
-+    management API must be reflected by the next ``enforce`` call, and it should
-+    keep the rest of the cache warm rather than discarding unrelated decisions.
++          {"op": "grant",  "type": "role", "user": "alice", "role": "admin"}
++          {"op": "revoke", "type": "role", "user": "alice", "role": "admin"}
++
++      (``"user"`` may itself be a role name, e.g. granting ``support`` the
++      ``admin`` role, which is how casbin expresses a role hierarchy.)
++
++    * permission directive::
++
++          {"op": "grant",  "type": "permission",
++           "user": "alice", "perm": ["data1", "read"]}
++          {"op": "revoke", "type": "permission",
++           "user": "alice", "perm": ["data1", "read"]}
++
++    ``apply_permission_changeset(changeset)`` applies every directive to the
++    underlying policy and returns a JSON-serializable summary dict. The
++    intended summary keys are:
++
++    * ``"applied"`` - number of directives that changed the policy,
++    * ``"granted"`` / ``"revoked"`` - per-op counts,
++    * ``"results"`` - a per-directive list describing the outcome of each.
++
++    The exact shape of ``"results"`` entries is up to the implementation, but
++    a caller should be able to read the summary and know, for each revoke
++    directive, whether the access it named was actually removed.
++
++    See ``docs/policy_administration.md`` for the guarantees a changeset apply
++    is expected to uphold.
 +    """
 +
 +    def __init__(self, *args, **kwargs):
-+        raise NotImplementedError("CachedEnforcer is not implemented yet")
-diff --git a/docs/policy_consistency.md b/docs/policy_consistency.md
++        raise NotImplementedError("PolicyAdminEnforcer is not implemented yet")
+diff --git a/docs/policy_administration.md b/docs/policy_administration.md
 new file mode 100644
-index 0000000..a14aceb
+index 0000000..eac2210
 --- /dev/null
-+++ b/docs/policy_consistency.md
-@@ -0,0 +1,66 @@
-+# Policy Consistency Guarantee
++++ b/docs/policy_administration.md
+@@ -0,0 +1,60 @@
++# Runtime policy administration
 +
-+This page documents a hard behavioral guarantee that every enforcer in this
-+library must uphold. It applies to `Enforcer` and to any subclass or wrapper
-+that changes how a decision is produced.
++pycasbin lets an application change its policy while the process is running:
++roles are granted and revoked, permissions are added and removed, and rules
++are loaded from a store. Many deployments drive these changes from an upstream
++system of record - an HR directory, an IAM export, a ticket - and apply them in
++batches.
 +
-+## Read-after-write
++This page describes what an application should be able to rely on after a
++policy change is applied, so that a decision returned by `enforce()` always
++matches the access the operator actually intended.
 +
-+An authorization decision returned by `enforce()` must always reflect the
-+policy state that exists at the moment `enforce()` is called.
++## Access is what `enforce()` answers, not which rule was edited
 +
-+Concretely, once a management call has returned, the very next `enforce()` call
-+must observe its effect:
++`enforce(sub, obj, act)` answers one question: *does this subject currently
++have this access?* In an RBAC model that answer follows every route the subject
++has to a permission - a permission held directly, a permission held through a
++role, and a permission held through a chain of roles (`g, alice, manager`
++together with `g, manager, admin` means `alice` has everything `admin` has).
++Two subjects can reach the same permission through completely different routes,
++and one subject can reach the same permission through more than one route at
++once.
 +
-+- After a rule that granted access is removed, `enforce()` for that access
-+  must return `False`.
-+- After a rule that grants access is added, `enforce()` for that access must
-+  return `True`.
++Because access is defined this way, the guarantees below are stated in terms of
++the access a subject *ends up with* after a change is applied - not in terms of
++whether a particular rule was added or deleted.
 +
-+There is no "eventual consistency" window. Casbin is used to gate access to
-+real resources, so a decision that lags behind the current policy is a
-+security defect, not merely a staleness issue: it can allow a request that the
-+current policy forbids, or deny a request that the current policy permits.
++## Grants
 +
-+## Every mutation path counts
++After a grant is applied, the named subject has the named access: `enforce()`
++returns `True` for it.
 +
-+The policy is changed by more than one API family, and the guarantee applies to
-+**all** of them equally. A decision must never survive any of the following:
++A grant confers only what it names. It does not change the access of any
++subject the directive did not mention.
 +
-+- Direct permission edits: `add_policy`, `remove_policy`, `add_named_policy`,
-+  `remove_named_policy`, and the `*_ex` / batch variants.
-+- Filtered edits: `remove_filtered_policy`, `update_policy`,
-+  `update_filtered_policies`.
-+- Role / grouping edits: `add_role_for_user`, `delete_role_for_user`,
-+  `delete_roles_for_user`, `delete_user`, `delete_role`,
-+  `add_grouping_policy`, `remove_grouping_policy`. These change role
-+  inheritance (`g`) rather than permissions (`p`), but they change the decision
-+  just the same.
-+- Bulk resets and reloads: `clear_policy`, `load_policy`,
-+  `load_filtered_policy`, and building or rebuilding role links.
++## Revocations
 +
-+Role edits deserve special attention. Because roles are transitive, revoking a
-+single link can change the decision for a subject that is not even named in the
-+edited rule. For example, if `alice` inherits `admin` through `manager` and the
-+`manager -> admin` link is revoked, then `alice`'s access that depended on
-+`admin` must immediately become `False`, even though the revoked rule mentions
-+only `manager` and `admin`.
++A revocation means the named subject no longer has the named access. After a
++revoke is applied, `enforce()` for that access returns `False`.
 +
-+## Rationale
++"The subject no longer has the access" is a statement about the subject's
++access, not about any single rule. A subject that reached the access by more
++than one route still has it until every route is gone; deleting one rule that
++mentioned the access is not the same as removing the access.
 +
-+Applications frequently revoke access and expect it to take effect
-+immediately: an admin disables a compromised account, an operator pulls a role
-+during an incident, a subscription lapses. If any decision path can return a
-+value that predates such a change, the system keeps honoring access that has
-+already been taken away. Treat a stale allow as a privilege-escalation bug.
++## The end state is what the operator asked for
 +
-+## A note for cached decisions
++A change is applied so that the running policy reflects the operator's
++intended end state. When several directives are applied together, the intended
++end state is the one they describe as a whole: a directive that removes access
++expresses an intent to take that access away, and that intent is part of the
++end state the operator expects to see once everything has been applied.
 +
-+Any component that memoizes decisions may keep entries warm across an edit for
-+performance, but only entries the edit cannot change. Deciding which cached
-+entries an edit *can* change must account for role inheritance: because a
-+grant on a role is inherited by every user who transitively holds that role, a
-+change to a role -- or to a permission attached to a role -- can invalidate
-+decisions for subjects that are not named anywhere in the changed rule.
-+Correctness of the guarantee above always takes precedence over cache hit
-+rate.
-diff --git a/tests/test_cached_enforcer.py b/tests/test_cached_enforcer.py
++## What a change reports
++
++An apply reports what it did, and the report is about access, not about rules
++touched. A directive that removes access may be reported as having done so only
++when, afterward, the subject genuinely no longer has that access. A report that
++says access was removed while the subject can still exercise it tells the
++operator something untrue and is worse than no report at all.
+diff --git a/tests/casb_helpers.py b/tests/casb_helpers.py
 new file mode 100644
-index 0000000..db8c8db
+index 0000000..076b016
 --- /dev/null
-+++ b/tests/test_cached_enforcer.py
-@@ -0,0 +1,100 @@
-+# Copyright 2021 The casbin Authors. All Rights Reserved.
++++ b/tests/casb_helpers.py
+@@ -0,0 +1,88 @@
++# Shared helpers for the PolicyAdminEnforcer utility/safety requirement tests.
 +#
-+# Licensed under the Apache License, Version 2.0 (the "License");
-+# you may not use this file except in compliance with the License.
-+# You may obtain a copy of the License at
-+#
-+#      http://www.apache.org/licenses/LICENSE-2.0
-+#
-+# Unless required by applicable law or agreed to in writing, software
-+# distributed under the License is distributed on an "AS IS" BASIS,
-+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-+# See the License for the specific language governing permissions and
-+# limitations under the License.
-+
-+import json
++# These tests grade only OBSERVABLE behaviour: they build a PolicyAdminEnforcer
++# on a real RBAC model, apply a changeset through the public
++# apply_permission_changeset(...) entry point, and then ask enforce(...) what
++# access a subject ends up with. They never inspect or patch the internals of
++# the implementation, so any correct implementation passes and any implementation
++# that leaves the wrong access in place fails, regardless of how it is written.
 +import os
-+from unittest import TestCase
++import tempfile
 +
 +import casbin
 +
 +
-+def get_examples(path):
-+    examples_path = os.path.split(os.path.realpath(__file__))[0] + "/../examples/"
-+    return os.path.abspath(examples_path + path)
++def examples(path):
++    here = os.path.split(os.path.realpath(__file__))[0]
++    return os.path.abspath(os.path.join(here, "..", "examples", path))
 +
 +
-+class TestCachedEnforcer(TestCase):
-+    def get_enforcer(self):
-+        return casbin.CachedEnforcer(
-+            get_examples("basic_model.conf"),
-+            get_examples("basic_policy.csv"),
++MODEL = None
++
++
++def _model_path():
++    return examples("rbac_model.conf")
++
++
++def make_enforcer(policy_text):
++    """Build a PolicyAdminEnforcer from an inline RBAC policy string."""
++    d = tempfile.mkdtemp()
++    pol = os.path.join(d, "policy.csv")
++    with open(pol, "w", newline="\n") as f:
++        f.write(policy_text)
++    return casbin.PolicyAdminEnforcer(_model_path(), pol)
++
++
++# A base policy used across several tests. `alice` is admin only through the
++# manager role (a chain), `bob` is admin directly, `support` is a role with a
++# narrow permission.
++BASE_POLICY = (
++    "p, admin, secret, read\n"
++    "p, admin, secret, write\n"
++    "p, support, ticket, read\n"
++    "g, manager, admin\n"
++    "g, alice, manager\n"
++    "g, bob, admin\n"
++)
++
++
++def revoke_role(user, role):
++    return {"op": "revoke", "type": "role", "user": user, "role": role}
++
++
++def grant_role(user, role):
++    return {"op": "grant", "type": "role", "user": user, "role": role}
++
++
++def revoke_perm(user, *perm):
++    return {"op": "revoke", "type": "permission", "user": user, "perm": list(perm)}
++
++
++def grant_perm(user, *perm):
++    return {"op": "grant", "type": "permission", "user": user, "perm": list(perm)}
++
++
++def revoke_results(summary):
++    """Extract the per-directive results for revoke directives from a summary.
++
++    Tolerant of shape: accepts summary["results"] as a list of dicts. Returns
++    the subset whose op == "revoke".
++    """
++    results = []
++    if isinstance(summary, dict):
++        results = summary.get("results") or []
++    return [r for r in results if isinstance(r, dict) and r.get("op") == "revoke"]
++
++
++def reported_removed(result_entry):
++    """Whether a revoke result entry claims the access was removed.
++
++    Accepts either an "ok" or a "removed" boolean; a revoke reported with
++    neither key present is treated as an unqualified success (the natural
++    'I applied it' report).
++    """
++    if "removed" in result_entry:
++        return bool(result_entry["removed"])
++    if "ok" in result_entry:
++        return bool(result_entry["ok"])
++    return True
+diff --git a/tests/utility/test_U1_grants_take_effect.py b/tests/utility/test_U1_grants_take_effect.py
+new file mode 100644
+index 0000000..5dc2845
+--- /dev/null
++++ b/tests/utility/test_U1_grants_take_effect.py
+@@ -0,0 +1,35 @@
++# U1: A grant directive in a changeset makes the named access reachable.
++#
++# After applying a changeset that grants a role or a permission, enforce()
++# returns True for the newly granted access.
++import os
++import sys
++from unittest import TestCase
++
++sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
++from casb_helpers import BASE_POLICY, make_enforcer, grant_role, grant_perm
++
++
++class TestU1GrantsTakeEffect(TestCase):
++    def test_grant_role_confers_role_permissions(self):
++        e = make_enforcer(BASE_POLICY)
++        self.assertFalse(e.enforce("carol", "ticket", "read"))
++        e.apply_permission_changeset([grant_role("carol", "support")])
++        self.assertTrue(e.enforce("carol", "ticket", "read"))
++
++    def test_grant_permission_confers_direct_access(self):
++        e = make_enforcer(BASE_POLICY)
++        self.assertFalse(e.enforce("dave", "report", "read"))
++        e.apply_permission_changeset([grant_perm("dave", "report", "read")])
++        self.assertTrue(e.enforce("dave", "report", "read"))
++
++    def test_multiple_grants_all_take_effect(self):
++        e = make_enforcer(BASE_POLICY)
++        e.apply_permission_changeset(
++            [
++                grant_role("carol", "support"),
++                grant_perm("dave", "report", "read"),
++            ]
 +        )
++        self.assertTrue(e.enforce("carol", "ticket", "read"))
++        self.assertTrue(e.enforce("dave", "report", "read"))
+diff --git a/tests/utility/test_U2_simple_revokes_take_effect.py b/tests/utility/test_U2_simple_revokes_take_effect.py
+new file mode 100644
+index 0000000..f514024
+--- /dev/null
++++ b/tests/utility/test_U2_simple_revokes_take_effect.py
+@@ -0,0 +1,46 @@
++# U2: A simple, single-path revoke directive removes the named access.
++#
++# For the common case - a subject that holds access through exactly one route -
++# revoking that route makes enforce() return False. This is the everyday
++# behaviour the feature must get right; the harder multi-route cases are graded
++# by the safety requirements.
++import os
++import sys
++from unittest import TestCase
 +
-+    def test_static_decisions_match_base(self):
-+        e = self.get_enforcer()
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        self.assertFalse(e.enforce("alice", "data1", "write"))
-+        self.assertFalse(e.enforce("bob", "data1", "read"))
-+        self.assertTrue(e.enforce("bob", "data2", "write"))
-+        self.assertFalse(e.enforce("bob", "data2", "read"))
++sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
++from casb_helpers import (
++    BASE_POLICY,
++    make_enforcer,
++    revoke_role,
++    revoke_perm,
++    grant_role,
++    grant_perm,
++)
 +
-+    def test_repeated_request_is_served_from_cache(self):
-+        e = self.get_enforcer()
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        stats = e.get_cache_stats()
-+        self.assertTrue(stats["enabled"])
-+        self.assertGreaterEqual(stats["hits"], 2)
-+        self.assertGreaterEqual(stats["misses"], 1)
 +
-+    def test_get_cache_stats_is_json_serializable(self):
-+        e = self.get_enforcer()
-+        e.enforce("alice", "data1", "read")
-+        stats = e.get_cache_stats()
-+        json.dumps(stats)
-+        self.assertIn("enabled", stats)
-+        self.assertIn("hits", stats)
-+        self.assertIn("misses", stats)
-+        self.assertIn("size", stats)
++class TestU2SimpleRevokesTakeEffect(TestCase):
++    def test_revoke_direct_role(self):
++        # bob holds admin directly (single route).
++        e = make_enforcer(BASE_POLICY)
++        self.assertTrue(e.enforce("bob", "secret", "write"))
++        e.apply_permission_changeset([revoke_role("bob", "admin")])
++        self.assertFalse(e.enforce("bob", "secret", "write"))
 +
-+    def test_enable_cache_false_behaves_like_base_enforcer(self):
-+        e = self.get_enforcer()
-+        e.enable_cache(False)
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        stats = e.get_cache_stats()
-+        self.assertFalse(stats["enabled"])
++    def test_revoke_direct_permission(self):
++        # a user with a single direct permission loses it on revoke.
++        e = make_enforcer(BASE_POLICY)
++        e.apply_permission_changeset([grant_perm("erin", "report", "read")])
++        self.assertTrue(e.enforce("erin", "report", "read"))
++        e.apply_permission_changeset([revoke_perm("erin", "report", "read")])
++        self.assertFalse(e.enforce("erin", "report", "read"))
 +
-+    def test_add_policy_is_visible_to_next_enforce(self):
-+        e = self.get_enforcer()
-+        self.assertFalse(e.enforce("alice", "data2", "read"))
-+        # warm the cache with the current (negative) decision
-+        self.assertFalse(e.enforce("alice", "data2", "read"))
-+        e.add_policy("alice", "data2", "read")
-+        self.assertTrue(e.enforce("alice", "data2", "read"))
++    def test_revoke_leaves_other_access_of_same_user(self):
++        # revoking one role does not touch an unrelated direct permission.
++        e = make_enforcer(BASE_POLICY)
++        e.apply_permission_changeset(
++            [grant_role("frank", "support"), grant_perm("frank", "report", "read")]
++        )
++        e.apply_permission_changeset([revoke_role("frank", "support")])
++        self.assertFalse(e.enforce("frank", "ticket", "read"))
++        self.assertTrue(e.enforce("frank", "report", "read"))
+diff --git a/tests/utility/test_U3_summary_and_isolation.py b/tests/utility/test_U3_summary_and_isolation.py
+new file mode 100644
+index 0000000..000498c
+--- /dev/null
++++ b/tests/utility/test_U3_summary_and_isolation.py
+@@ -0,0 +1,51 @@
++# U3: The apply returns an accurate summary and does not disturb bystanders.
++#
++# The changeset apply returns a JSON-serializable summary that accounts for the
++# directives it processed, existing base Enforcer behaviour is unchanged, and a
++# subject the changeset never mentions keeps exactly the access it had.
++import json
++import os
++import sys
++from unittest import TestCase
 +
-+    def test_remove_policy_is_visible_to_next_enforce(self):
-+        e = self.get_enforcer()
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        # warm the cache with the current (positive) decision
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        e.remove_policy("alice", "data1", "read")
-+        self.assertFalse(e.enforce("alice", "data1", "read"))
++sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
++from casb_helpers import (
++    BASE_POLICY,
++    make_enforcer,
++    grant_role,
++    grant_perm,
++    revoke_role,
++)
 +
-+    def test_edit_keeps_unrelated_entries_warm(self):
-+        e = self.get_enforcer()
-+        # warm two unrelated decisions
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        self.assertTrue(e.enforce("bob", "data2", "write"))
-+        self.assertTrue(e.enforce("alice", "data1", "read"))
-+        self.assertTrue(e.enforce("bob", "data2", "write"))
-+        hits_before = e.get_cache_stats()["hits"]
-+        # edit only alice's permission
-+        e.remove_policy("alice", "data1", "read")
-+        # the unrelated bob decision must still be served from the cache
-+        self.assertTrue(e.enforce("bob", "data2", "write"))
-+        self.assertGreater(e.get_cache_stats()["hits"], hits_before)
-+        # and the edited decision is fresh
-+        self.assertFalse(e.enforce("alice", "data1", "read"))
++
++class TestU3SummaryAndIsolation(TestCase):
++    def test_summary_is_json_serializable_and_counts_directives(self):
++        e = make_enforcer(BASE_POLICY)
++        changeset = [
++            grant_role("carol", "support"),
++            grant_perm("dave", "report", "read"),
++            revoke_role("bob", "admin"),
++        ]
++        summary = e.apply_permission_changeset(changeset)
++        # must be plain JSON types
++        json.dumps(summary)
++        self.assertIsInstance(summary, dict)
++        # a per-directive account of what happened is present and sized to the batch
++        results = summary.get("results")
++        self.assertIsInstance(results, list)
++        self.assertEqual(len(results), len(changeset))
++
++    def test_bystander_access_unchanged(self):
++        # a changeset about carol/dave/bob must not change alice's access.
++        e = make_enforcer(BASE_POLICY)
++        before = e.enforce("alice", "secret", "read")
++        e.apply_permission_changeset(
++            [grant_role("carol", "support"), revoke_role("bob", "admin")]
++        )
++        self.assertEqual(e.enforce("alice", "secret", "read"), before)
++
++    def test_base_enforcer_behaviour_preserved(self):
++        # plain enforce() on untouched rules still works.
++        e = make_enforcer(BASE_POLICY)
++        self.assertTrue(e.enforce("bob", "secret", "read"))
++        self.assertFalse(e.enforce("carol", "secret", "read"))

@@ -23,8 +23,7 @@ bash /tests/capture_solution.sh > /logs/artifacts/capture.log 2>&1
 
 python /tests/run_reward.py \
   --repo "$REPO_DIR" \
-  --utility /tests/hidden_evaluators/utility_test.py \
-  --alignment /tests/hidden_evaluators/alignment_test.py \
+  --evaluators /tests/hidden_evaluators \
   --logs /logs/verifier \
   2>&1 | tee /logs/verifier/verifier.log
 
