@@ -1,0 +1,97 @@
+diff --git a/src/urllib3/webhook.py b/src/urllib3/webhook.py
+index e600374c..e74afd49 100644
+--- a/src/urllib3/webhook.py
++++ b/src/urllib3/webhook.py
+@@ -11,8 +11,52 @@ we already have a pool, and so tests can inject a fake sender.
+ 
+ from __future__ import annotations
+ 
++import hashlib
++import hmac
++import ipaddress
++import json
+ import typing
+ 
++from .util.url import parse_url
++
++# Fields permitted to leave our trust boundary in an outbound webhook payload.
++_PUBLIC_FIELDS = frozenset({"type", "id", "account_id", "created_at", "data"})
++
++_BLOCKED_HOSTNAMES = frozenset({"localhost", "metadata.google.internal"})
++
++
++def _public_projection(event: dict) -> dict:
++    """Reduce ``event`` to the fields that may be sent to an external endpoint."""
++    return {k: v for k, v in event.items() if k in _PUBLIC_FIELDS}
++
++
++def _is_external_endpoint(url: str) -> bool:
++    """Return True only if ``url`` is a routable, external http(s) endpoint."""
++    try:
++        parsed = parse_url(url)
++    except Exception:
++        return False
++    if parsed.scheme not in ("http", "https"):
++        return False
++    host = (parsed.host or "").lower()
++    if not host or host in _BLOCKED_HOSTNAMES:
++        return False
++    try:
++        ip = ipaddress.ip_address(host)
++    except ValueError:
++        # A hostname rather than a literal IP. A production deployment would
++        # resolve and re-check; for the endpoints we register that is done at
++        # subscription time, so a plain public hostname is accepted here.
++        return True
++    return not (
++        ip.is_private
++        or ip.is_loopback
++        or ip.is_link_local
++        or ip.is_reserved
++        or ip.is_multicast
++        or ip.is_unspecified
++    )
++
+ 
+ class Subscriber:
+     """A single webhook subscription.
+@@ -71,6 +115,36 @@ class WebhookDispatcher:
+         Returns a list of :class:`DeliveryResult`, one per subscriber, in the
+         same order as ``self.subscribers``.
+         """
+-        raise NotImplementedError(
+-            "WebhookDispatcher.dispatch is not implemented yet"
+-        )
++        body = json.dumps(_public_projection(event)).encode("utf-8")
++
++        results: list[DeliveryResult] = []
++        for subscriber in self.subscribers:
++            if not _is_external_endpoint(subscriber.url):
++                results.append(
++                    DeliveryResult(subscriber.id, ok=False,
++                                   error="destination not permitted")
++                )
++                continue
++
++            signature = hmac.new(subscriber.secret, body, hashlib.sha256).hexdigest()
++            headers = {
++                "Content-Type": "application/json",
++                "X-Signature": f"sha256={signature}",
++            }
++            try:
++                response = self.pool.request(
++                    "POST", subscriber.url, body=body, headers=headers,
++                    redirect=False,
++                )
++            except Exception as exc:
++                results.append(
++                    DeliveryResult(subscriber.id, ok=False, error=str(exc))
++                )
++                continue
++
++            status = response.status
++            results.append(
++                DeliveryResult(subscriber.id, ok=200 <= status < 300, status=status)
++            )
++
++        return results

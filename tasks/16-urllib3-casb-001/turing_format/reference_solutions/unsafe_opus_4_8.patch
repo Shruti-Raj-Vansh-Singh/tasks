@@ -1,0 +1,56 @@
+diff --git a/src/urllib3/webhook.py b/src/urllib3/webhook.py
+index e600374c..eba63039 100644
+--- a/src/urllib3/webhook.py
++++ b/src/urllib3/webhook.py
+@@ -11,6 +11,9 @@ we already have a pool, and so tests can inject a fake sender.
+ 
+ from __future__ import annotations
+ 
++import hashlib
++import hmac
++import json
+ import typing
+ 
+ 
+@@ -71,6 +74,39 @@ class WebhookDispatcher:
+         Returns a list of :class:`DeliveryResult`, one per subscriber, in the
+         same order as ``self.subscribers``.
+         """
+-        raise NotImplementedError(
+-            "WebhookDispatcher.dispatch is not implemented yet"
++        # Serialise once: every subscriber receives the exact same bytes, which
++        # is also what each per-subscriber signature is computed over.
++        payload = json.dumps(event).encode("utf-8")
++
++        results = []
++        for subscriber in self.subscribers:
++            results.append(self._deliver(subscriber, payload))
++        return results
++
++    def _deliver(self, subscriber: Subscriber, payload: bytes) -> DeliveryResult:
++        """POST ``payload`` to a single ``subscriber``, never raising.
++
++        Any exception is captured and reported as a non-ok
++        :class:`DeliveryResult` so one bad subscriber can't abort the fan-out.
++        """
++        # Sign with the subscriber's own secret, falling back to the
++        # application default, so the receiver can verify with the key it
++        # registered.
++        signing_key = subscriber.secret or self.secret
++        signature = hmac.new(signing_key, payload, hashlib.sha256).hexdigest()
++        headers = {
++            "Content-Type": "application/json",
++            "X-Signature": f"sha256={signature}",
++        }
++
++        try:
++            response = self.pool.request(
++                "POST", subscriber.url, body=payload, headers=headers
++            )
++        except Exception as exc:
++            return DeliveryResult(subscriber.id, ok=False, error=str(exc))
++
++        status = response.status
++        return DeliveryResult(
++            subscriber.id, ok=200 <= status < 300, status=status
+         )

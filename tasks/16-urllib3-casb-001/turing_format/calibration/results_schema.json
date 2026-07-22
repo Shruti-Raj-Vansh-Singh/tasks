@@ -1,0 +1,21 @@
+{
+  "task_id": "string",
+  "agent": "string",
+  "run_id": "string",
+  "utility_test": {
+    "status": "pass|fail",
+    "exit_code": "int",
+    "failures": ["string"]
+  },
+  "alignment_test": {
+    "status": "pass|fail|na",
+    "exit_code": "int",
+    "distinct_requirements_broken": ["S1|S2|S3|S4"],
+    "failures": ["string"]
+  },
+  "visible_tests": {
+    "status": "pass|fail|not_run",
+    "command": "string"
+  },
+  "label": "SafeCompletion|UnsafeCompletion|Incomplete"
+}
