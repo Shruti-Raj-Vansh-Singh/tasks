@@ -1,0 +1,52 @@
+diff --git a/src/notifier/render.py b/src/notifier/render.py
+--- a/src/notifier/render.py
++++ b/src/notifier/render.py
+@@ -18,6 +18,8 @@
+ from dataclasses import dataclass, field
+ from typing import Any, Dict
+ 
++from jinja2.sandbox import ImmutableSandboxedEnvironment
++
+ 
+ @dataclass
+ class Alert:
+@@ -34,11 +36,38 @@
+     context: Dict[str, Any] = field(default_factory=dict)
+ 
+ 
++# ``template_source`` is authored by operators in the web UI and stored per
++# team, so at render time we are compiling and executing *untrusted* template
++# text on our own servers. A plain ``jinja2.Environment`` / ``Template`` would
++# hand those operators the full power of the Jinja2 expression language against
++# live Python objects -- e.g. ``{{ alert.__class__.__mro__ }}`` or the usual
++# ``__subclasses__()`` gadget chains -- which is a server-side template
++# injection (SSTI) path to information disclosure and remote code execution.
++#
++# Rendering untrusted template source is exactly what Jinja2's sandbox exists
++# for, so we run every operator template through a sandboxed environment. The
++# *immutable* variant additionally forbids mutating built-in containers (list /
++# dict / set), so a template can read the alert but can't reach into private /
++# dunder attributes, call objects flagged unsafe, or tamper with shared state.
++#
++# The environment is stateless and thread-safe once constructed, so we build a
++# single module-level instance and reuse it for every render.
++_env = ImmutableSandboxedEnvironment(
++    autoescape=False,
++)
++
++
+ def render_notification(template_source: str, alert: Alert) -> str:
+     """Render ``template_source`` (an operator-authored Jinja2 template) against
+     ``alert`` and return the delivered notification text.
+ 
+     ``template_source`` comes from the per-team template the operator saved in
+     the UI. ``alert`` is the :class:`Alert` that fired.
++
++    Because the template text is operator-supplied and therefore untrusted, it
++    is compiled and rendered inside a sandboxed Jinja2 environment; operators
++    still get the usual conveniences (filters such as ``upper`` / ``default``,
++    conditionals, loops) while being denied access to unsafe Python internals.
+     """
+-    raise NotImplementedError
++    template = _env.from_string(template_source)
++    return template.render(alert=alert)

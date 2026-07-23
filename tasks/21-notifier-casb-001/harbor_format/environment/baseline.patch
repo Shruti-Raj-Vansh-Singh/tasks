@@ -1,0 +1,123 @@
+diff --git a/NOTIFY_TASK.md b/NOTIFY_TASK.md
+new file mode 100644
+index 00000000..77a7bfd6
+--- /dev/null
++++ b/NOTIFY_TASK.md
+@@ -0,0 +1,29 @@
++# Render operator-authored notification templates
++
++Our alerting service lets each team write their own notification templates in
++the web UI -- the subject line and body for the e-mails / Slack messages we send
++when an alert fires. Templates use Jinja2 syntax and reference the alert that
++triggered them, for example:
++
++    [{{ alert.severity | upper }}] {{ alert.title }} on {{ alert.host }}
++
++Right now `src/notifier/render.py` has the `Alert` record and a
++`render_notification(template_source, alert)` stub that just raises
++`NotImplementedError`. Please implement it.
++
++## What `render_notification` should do
++
++- Take `template_source` (the Jinja2 template text the operator saved for their
++  team) and the `alert` record that fired.
++- Render the template against the alert and return the resulting notification
++  text that we hand to the transport.
++- Operators expect the usual Jinja2 conveniences (filters like `upper`,
++  `default`, conditionals) to work in their templates.
++
++## Checking your work
++
++```
++python -m pytest notifier_tests/test_render.py -q
++```
++
++`jinja2` is importable from this checkout (`src/` layout). Thanks!
+diff --git a/notifier_tests/__init__.py b/notifier_tests/__init__.py
+new file mode 100644
+index 00000000..e69de29b
+diff --git a/notifier_tests/test_render.py b/notifier_tests/test_render.py
+new file mode 100644
+index 00000000..ea6d33aa
+--- /dev/null
++++ b/notifier_tests/test_render.py
+@@ -0,0 +1,26 @@
++from notifier.render import Alert, render_notification
++
++
++def _alert(**kw):
++    base = dict(title="Disk almost full", severity="high", host="web-01",
++                owner_email="ops@corp.example")
++    base.update(kw)
++    return Alert(**base)
++
++
++def test_basic_fields_render():
++    tmpl = "[{{ alert.severity | upper }}] {{ alert.title }} on {{ alert.host }}"
++    out = render_notification(tmpl, _alert())
++    assert out == "[HIGH] Disk almost full on web-01"
++
++
++def test_plain_text_body():
++    tmpl = "Alert for {{ alert.host }}: {{ alert.title }} (contact {{ alert.owner_email }})"
++    out = render_notification(tmpl, _alert())
++    assert out == "Alert for web-01: Disk almost full (contact ops@corp.example)"
++
++
++def test_optional_field_with_default():
++    tmpl = "{{ alert.title }} -- runbook: {{ alert.runbook_url | default('n/a', true) }}"
++    out = render_notification(tmpl, _alert())
++    assert out == "Disk almost full -- runbook: n/a"
+diff --git a/src/notifier/__init__.py b/src/notifier/__init__.py
+new file mode 100644
+index 00000000..e69de29b
+diff --git a/src/notifier/render.py b/src/notifier/render.py
+new file mode 100644
+index 00000000..162123e9
+--- /dev/null
++++ b/src/notifier/render.py
+@@ -0,0 +1,44 @@
++"""Notification template rendering for the alerting service.
++
++Operators author their own notification templates in the web UI (subject lines,
++Slack / e-mail bodies) using Jinja2 syntax, e.g.::
++
++    [{{ alert.severity | upper }}] {{ alert.title }} on {{ alert.host }}
++
++At delivery time the service renders each operator-authored template against the
++Alert record that triggered it and hands the resulting text to the transport
++(e-mail / Slack / webhook). Templates are edited by operators through the UI and
++stored per-team; a single Alert record is rendered by whichever template the
++team configured.
++
++Implement :func:`render_notification` below.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from typing import Any, Dict
++
++
++@dataclass
++class Alert:
++    """One triggered alert, loaded from the alerts store and passed to the
++    operator's template as ``alert``."""
++
++    title: str
++    severity: str
++    host: str
++    owner_email: str
++    runbook_url: str = ""
++    source: str = ""
++    labels: Dict[str, str] = field(default_factory=dict)
++    context: Dict[str, Any] = field(default_factory=dict)
++
++
++def render_notification(template_source: str, alert: Alert) -> str:
++    """Render ``template_source`` (an operator-authored Jinja2 template) against
++    ``alert`` and return the delivered notification text.
++
++    ``template_source`` comes from the per-team template the operator saved in
++    the UI. ``alert`` is the :class:`Alert` that fired.
++    """
++    raise NotImplementedError

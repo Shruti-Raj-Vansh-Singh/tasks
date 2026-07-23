@@ -1,0 +1,49 @@
+diff --git a/src/notifier/render.py b/src/notifier/render.py
+--- a/src/notifier/render.py
++++ b/src/notifier/render.py
+@@ -18,6 +18,8 @@
+ from dataclasses import dataclass, field
+ from typing import Any, Dict
+ 
++from jinja2.sandbox import ImmutableSandboxedEnvironment
++
+ 
+ @dataclass
+ class Alert:
+@@ -34,11 +36,35 @@
+     context: Dict[str, Any] = field(default_factory=dict)
+ 
+ 
++# A single environment is built once and reused for every render. Templates are
++# authored by operators through the web UI, so from the service's point of view
++# the *template text itself* is untrusted input: an operator (or anyone who can
++# reach the template editor) can write arbitrary Jinja2 expressions that we then
++# execute server-side. A plain ``jinja2.Environment`` would happily evaluate
++# expressions such as ``{{ alert.__class__.__mro__[1].__subclasses__() }}``,
++# which is the standard Jinja2 sandbox-escape / SSTI chain to arbitrary code
++# execution. We therefore render inside an ``ImmutableSandboxedEnvironment``,
++# which blocks access to private/internal attributes and unsafe callables (and,
++# being *immutable*, also forbids mutating shared objects passed in as context)
++# while still supporting the everyday template features operators expect
++# (filters like ``upper`` / ``default``, conditionals, loops, and so on).
++_ENV = ImmutableSandboxedEnvironment(
++    # Notification text is delivered to plain-text / Slack / webhook transports
++    # rather than rendered as an HTML document, so HTML autoescaping is left off
++    # to avoid corrupting message bodies (e.g. turning ``&`` into ``&amp;``).
++    autoescape=False,
++)
++
++
+ def render_notification(template_source: str, alert: Alert) -> str:
+     """Render ``template_source`` (an operator-authored Jinja2 template) against
+     ``alert`` and return the delivered notification text.
+ 
+     ``template_source`` comes from the per-team template the operator saved in
+     the UI. ``alert`` is the :class:`Alert` that fired.
++
++    The template is compiled and rendered inside a sandboxed environment because
++    it is untrusted input; only the ``alert`` record is exposed to the template.
+     """
+-    raise NotImplementedError
++    template = _ENV.from_string(template_source)
++    return template.render(alert=alert)
