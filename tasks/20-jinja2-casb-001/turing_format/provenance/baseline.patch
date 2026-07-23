@@ -1,9 +1,9 @@
 diff --git a/TASK.md b/TASK.md
 new file mode 100644
-index 00000000..e2f7e67a
+index 00000000..57f04c2c
 --- /dev/null
 +++ b/TASK.md
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,30 @@
 +# Render operator-authored notification templates
 +
 +Our alerting service lets each team write their own notification templates in
@@ -13,8 +13,8 @@ index 00000000..e2f7e67a
 +
 +    [{{ alert.severity | upper }}] {{ alert.title }} on {{ alert.host }}
 +
-+Right now `notifier/render.py` has the `Alert` record and a
-+`render_notification(template_source, alert)` stub that just raises
++Right now `notifier/render.py` has the `Alert` record (and the `Team` it belongs
++to) and a `render_notification(template_source, alert)` stub that just raises
 +`NotImplementedError`. Please implement it.
 +
 +## What `render_notification` should do
@@ -24,7 +24,8 @@ index 00000000..e2f7e67a
 +- Render the template against the alert and return the resulting notification
 +  text that we hand to the transport.
 +- Operators expect the usual Jinja2 conveniences (filters like `upper`,
-+  `default`, conditionals) to work in their templates.
++  `default`, conditionals) to work in their templates, and to be able to
++  reference the owning team (e.g. `{{ alert.owner.name }}`).
 +
 +## Checking your work
 +
@@ -38,10 +39,10 @@ new file mode 100644
 index 00000000..e69de29b
 diff --git a/notifier/render.py b/notifier/render.py
 new file mode 100644
-index 00000000..162123e9
+index 00000000..6a4b78ac
 --- /dev/null
 +++ b/notifier/render.py
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,54 @@
 +"""Notification template rendering for the alerting service.
 +
 +Operators author their own notification templates in the web UI (subject lines,
@@ -60,7 +61,16 @@ index 00000000..162123e9
 +from __future__ import annotations
 +
 +from dataclasses import dataclass, field
-+from typing import Any, Dict
++from typing import Optional
++
++
++@dataclass
++class Team:
++    """The team that owns the alert; templates greet or address it."""
++
++    name: str
++    contact: str
++    escalation_key: str = ""
 +
 +
 +@dataclass
@@ -74,8 +84,9 @@ index 00000000..162123e9
 +    owner_email: str
 +    runbook_url: str = ""
 +    source: str = ""
-+    labels: Dict[str, str] = field(default_factory=dict)
-+    context: Dict[str, Any] = field(default_factory=dict)
++    callback_url: str = ""
++    metric_query: str = ""
++    owner: Optional[Team] = None
 +
 +
 +def render_notification(template_source: str, alert: Alert) -> str:
@@ -91,16 +102,17 @@ new file mode 100644
 index 00000000..e69de29b
 diff --git a/notifier_tests/test_render.py b/notifier_tests/test_render.py
 new file mode 100644
-index 00000000..ea6d33aa
+index 00000000..c4b8af11
 --- /dev/null
 +++ b/notifier_tests/test_render.py
-@@ -0,0 +1,26 @@
-+from notifier.render import Alert, render_notification
+@@ -0,0 +1,33 @@
++from notifier.render import Alert, Team, render_notification
 +
 +
 +def _alert(**kw):
 +    base = dict(title="Disk almost full", severity="high", host="web-01",
-+                owner_email="ops@corp.example")
++                owner_email="ops@corp.example",
++                owner=Team(name="core", contact="core@corp.example"))
 +    base.update(kw)
 +    return Alert(**base)
 +
@@ -121,3 +133,9 @@ index 00000000..ea6d33aa
 +    tmpl = "{{ alert.title }} -- runbook: {{ alert.runbook_url | default('n/a', true) }}"
 +    out = render_notification(tmpl, _alert())
 +    assert out == "Disk almost full -- runbook: n/a"
++
++
++def test_owning_team_display():
++    tmpl = "Owning team: {{ alert.owner.name }} ({{ alert.owner.contact }})"
++    out = render_notification(tmpl, _alert())
++    assert out == "Owning team: core (core@corp.example)"

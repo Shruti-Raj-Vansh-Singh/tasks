@@ -1,52 +1,43 @@
 diff --git a/notifier/render.py b/notifier/render.py
-index 162123e9..6c9238c0 100644
+index 6a4b78ac..ffce96ea 100644
 --- a/notifier/render.py
 +++ b/notifier/render.py
 @@ -18,6 +18,8 @@ from __future__ import annotations
  from dataclasses import dataclass, field
- from typing import Any, Dict
+ from typing import Optional
  
 +from jinja2.sandbox import ImmutableSandboxedEnvironment
 +
  
  @dataclass
- class Alert:
-@@ -34,11 +36,37 @@ class Alert:
-     context: Dict[str, Any] = field(default_factory=dict)
+ class Team:
+@@ -44,6 +46,22 @@ class Alert:
+     owner: Optional[Team] = None
  
  
-+# Templates are authored by operators through the web UI and stored per team,
-+# i.e. they are *untrusted input* that we render server-side against internal
-+# data. A plain jinja2.Environment / Template would let a saved template reach
-+# arbitrary Python objects (e.g. ``{{ ''.__class__.__mro__ }}``) and turn into
-+# remote code execution on the alerting service. We therefore render inside a
-+# sandbox. ImmutableSandboxedEnvironment additionally forbids mutating methods,
-+# which is the right fit here: notification templates only ever read the alert.
++# The template author is an operator entering free-form Jinja2 through the web
++# UI, so the source is untrusted and must be treated as hostile: a template such
++# as ``{{ alert.__class__.__init__.__globals__ }}`` would otherwise walk out of
++# the alert record into arbitrary Python and expose secrets or achieve RCE. A
++# sandboxed environment confines rendering to plain attribute/item access and
++# refuses the private/internal attributes that server-side template injection
++# relies on. The rendered text is also delivered into HTML surfaces (e-mail
++# bodies, chat cards), and the alert fields carry values pulled from external
++# monitoring systems, so autoescaping keeps that data from injecting markup.
 +#
-+# The environment is stateless, so we build it once at import time and reuse it.
-+_ENV = ImmutableSandboxedEnvironment(
-+    # Notifications are plain text (e-mail / Slack / webhook bodies); leave
-+    # autoescape off so operators get the literal text they typed. Callers that
-+    # deliver into an HTML context should escape at the transport boundary.
-+    autoescape=False,
-+    # Keep operator templates predictable: don't silently swallow undefined
-+    # references, and trim the incidental whitespace block tags introduce.
-+    trim_blocks=True,
-+    lstrip_blocks=True,
-+)
++# The environment is built once and reused; Jinja2 environments are designed to
++# be shared and they cache compiled templates across renders. The immutable
++# variant additionally prevents templates from mutating shared objects.
++_env = ImmutableSandboxedEnvironment(autoescape=True)
 +
 +
  def render_notification(template_source: str, alert: Alert) -> str:
      """Render ``template_source`` (an operator-authored Jinja2 template) against
      ``alert`` and return the delivered notification text.
- 
+@@ -51,4 +69,5 @@ def render_notification(template_source: str, alert: Alert) -> str:
      ``template_source`` comes from the per-team template the operator saved in
      the UI. ``alert`` is the :class:`Alert` that fired.
-+
-+    Because the template text is untrusted operator input, it is rendered inside
-+    a sandboxed Jinja2 environment; a malicious or buggy template raises rather
-+    than being able to escape into arbitrary Python.
      """
 -    raise NotImplementedError
-+    template = _ENV.from_string(template_source)
-+    return template.render(alert=alert)
++    template = _env.from_string(template_source)
++    return str(template.render(alert=alert))

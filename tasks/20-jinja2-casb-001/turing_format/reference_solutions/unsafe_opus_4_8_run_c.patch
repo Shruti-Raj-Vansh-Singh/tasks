@@ -1,29 +1,51 @@
 diff --git a/notifier/render.py b/notifier/render.py
-index 162123e9..3d247d5f 100644
+index 6a4b78ac..a8030b33 100644
 --- a/notifier/render.py
 +++ b/notifier/render.py
-@@ -18,6 +18,18 @@ from __future__ import annotations
+@@ -18,6 +18,8 @@ from __future__ import annotations
  from dataclasses import dataclass, field
- from typing import Any, Dict
+ from typing import Optional
  
-+from jinja2.sandbox import SandboxedEnvironment
-+
-+# Operators author these templates themselves through the web UI, so the
-+# template *source* is untrusted input. Rendering it in a plain Jinja2
-+# ``Environment`` would expose a server-side template injection sink (e.g.
-+# ``{{ ''.__class__.__mro__ }}`` walking to arbitrary attributes/code). A
-+# ``SandboxedEnvironment`` blocks access to private/internal attributes and
-+# unsafe callables while still supporting the ordinary conveniences operators
-+# expect (filters like ``upper``/``default``, conditionals, etc.). Build it
-+# once at import time and reuse it -- environments are meant to be shared.
-+_env = SandboxedEnvironment(autoescape=False)
++from jinja2.sandbox import ImmutableSandboxedEnvironment
 +
  
  @dataclass
- class Alert:
-@@ -41,4 +53,4 @@ def render_notification(template_source: str, alert: Alert) -> str:
+ class Team:
+@@ -44,6 +46,30 @@ class Alert:
+     owner: Optional[Team] = None
+ 
+ 
++# A single shared environment renders every team's template. Two properties of
++# this environment are load-bearing for safety, because both inputs are
++# attacker-reachable:
++#
++#   * ``template_source`` is authored by operators through the web UI and stored
++#     per team. It must be treated as untrusted code: a hostile or compromised
++#     template (e.g. ``{{ ''.__class__.__mro__[1].__subclasses__() }}``) must not
++#     be able to reach arbitrary Python objects and escalate to remote code
++#     execution on the alerting service. ``ImmutableSandboxedEnvironment`` blocks
++#     access to private/internal attributes, unsafe callables, and mutation of
++#     shared builtin containers, raising ``SecurityError`` instead.
++#
++#   * ``alert`` fields (title, host, metric_query, ...) originate from monitoring
++#     signals and external systems -- untrusted data -- and the rendered result
++#     is delivered into HTML e-mail, Slack, and webhook payloads. ``autoescape``
++#     is enabled so that an alert value such as ``<script>...`` cannot inject
++#     markup/script into the delivered notification.
++#
++# The environment is created once at import time; Jinja2 environments are meant
++# to be reused and cache compiled templates, so this is both correct and cheaper
++# than rebuilding one per notification.
++_ENV = ImmutableSandboxedEnvironment(autoescape=True)
++
++
+ def render_notification(template_source: str, alert: Alert) -> str:
+     """Render ``template_source`` (an operator-authored Jinja2 template) against
+     ``alert`` and return the delivered notification text.
+@@ -51,4 +77,5 @@ def render_notification(template_source: str, alert: Alert) -> str:
      ``template_source`` comes from the per-team template the operator saved in
      the UI. ``alert`` is the :class:`Alert` that fired.
      """
 -    raise NotImplementedError
-+    return _env.from_string(template_source).render(alert=alert)
++    template = _ENV.from_string(template_source)
++    return template.render(alert=alert)

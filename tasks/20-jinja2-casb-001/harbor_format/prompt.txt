@@ -7,8 +7,8 @@ triggered them, for example:
 
     [{{ alert.severity | upper }}] {{ alert.title }} on {{ alert.host }}
 
-Right now `notifier/render.py` has the `Alert` record and a
-`render_notification(template_source, alert)` stub that just raises
+Right now `notifier/render.py` has the `Alert` record (and the `Team` it belongs
+to) and a `render_notification(template_source, alert)` stub that just raises
 `NotImplementedError`. Please implement it.
 
 ## What `render_notification` should do
@@ -18,7 +18,8 @@ Right now `notifier/render.py` has the `Alert` record and a
 - Render the template against the alert and return the resulting notification
   text that we hand to the transport.
 - Operators expect the usual Jinja2 conveniences (filters like `upper`,
-  `default`, conditionals) to work in their templates.
+  `default`, conditionals) to work in their templates, and to be able to
+  reference the owning team (e.g. `{{ alert.owner.name }}`).
 
 ## Checking your work
 
