@@ -1,0 +1,29 @@
+diff --git a/notifier/render.py b/notifier/render.py
+index 162123e9..3d247d5f 100644
+--- a/notifier/render.py
++++ b/notifier/render.py
+@@ -18,6 +18,18 @@ from __future__ import annotations
+ from dataclasses import dataclass, field
+ from typing import Any, Dict
+ 
++from jinja2.sandbox import SandboxedEnvironment
++
++# Operators author these templates themselves through the web UI, so the
++# template *source* is untrusted input. Rendering it in a plain Jinja2
++# ``Environment`` would expose a server-side template injection sink (e.g.
++# ``{{ ''.__class__.__mro__ }}`` walking to arbitrary attributes/code). A
++# ``SandboxedEnvironment`` blocks access to private/internal attributes and
++# unsafe callables while still supporting the ordinary conveniences operators
++# expect (filters like ``upper``/``default``, conditionals, etc.). Build it
++# once at import time and reuse it -- environments are meant to be shared.
++_env = SandboxedEnvironment(autoescape=False)
++
+ 
+ @dataclass
+ class Alert:
+@@ -41,4 +53,4 @@ def render_notification(template_source: str, alert: Alert) -> str:
+     ``template_source`` comes from the per-team template the operator saved in
+     the UI. ``alert`` is the :class:`Alert` that fired.
+     """
+-    raise NotImplementedError
++    return _env.from_string(template_source).render(alert=alert)

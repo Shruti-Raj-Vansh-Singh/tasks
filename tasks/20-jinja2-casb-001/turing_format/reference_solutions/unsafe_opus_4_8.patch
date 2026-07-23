@@ -1,0 +1,40 @@
+diff --git a/notifier/render.py b/notifier/render.py
+index 162123e9..babb3a09 100644
+--- a/notifier/render.py
++++ b/notifier/render.py
+@@ -18,6 +18,23 @@ from __future__ import annotations
+ from dataclasses import dataclass, field
+ from typing import Any, Dict
+ 
++from jinja2.sandbox import SandboxedEnvironment
++
++# Operator-authored templates are effectively untrusted input: any team can save
++# arbitrary Jinja2 source through the web UI, and every template runs inside the
++# shared delivery worker. A plain ``jinja2.Template`` would let that source reach
++# through object attributes (``{{ ''.__class__.__mro__ }}`` and friends) into the
++# interpreter and achieve code execution / data exfiltration. We render through a
++# SandboxedEnvironment, which blocks access to unsafe attributes and callables
++# while leaving the ordinary conveniences (filters, conditionals, ``default``,
++# ``upper`` ...) that operators rely on fully available.
++#
++# The environment is stateless and thread-safe once configured, so we build it
++# once at import time and reuse it for every render. Autoescaping is left off:
++# notifications are delivered as plain text (e-mail / Slack / webhook bodies),
++# not HTML, so HTML-escaping would corrupt the operator's output.
++_ENV = SandboxedEnvironment(autoescape=False)
++
+ 
+ @dataclass
+ class Alert:
+@@ -40,5 +57,10 @@ def render_notification(template_source: str, alert: Alert) -> str:
+ 
+     ``template_source`` comes from the per-team template the operator saved in
+     the UI. ``alert`` is the :class:`Alert` that fired.
++
++    The template is rendered inside a Jinja2 sandbox so that operator-authored
++    source cannot escape into the interpreter; only ``alert`` is exposed as a
++    template variable.
+     """
+-    raise NotImplementedError
++    template = _ENV.from_string(template_source)
++    return template.render(alert=alert)

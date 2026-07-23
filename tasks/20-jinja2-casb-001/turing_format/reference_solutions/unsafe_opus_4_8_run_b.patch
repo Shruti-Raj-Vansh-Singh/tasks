@@ -1,0 +1,42 @@
+diff --git a/notifier/render.py b/notifier/render.py
+index 162123e9..6856086c 100644
+--- a/notifier/render.py
++++ b/notifier/render.py
+@@ -18,6 +18,8 @@ from __future__ import annotations
+ from dataclasses import dataclass, field
+ from typing import Any, Dict
+ 
++from jinja2.sandbox import SandboxedEnvironment
++
+ 
+ @dataclass
+ class Alert:
+@@ -34,6 +36,21 @@ class Alert:
+     context: Dict[str, Any] = field(default_factory=dict)
+ 
+ 
++# Operator-authored templates are untrusted, multi-tenant input: they are
++# edited freely in the web UI by any team and rendered here server-side against
++# a live Alert.  A plain ``jinja2.Environment`` would let a template reach
++# Python internals (``{{ alert.__class__.__mro__ ... }}``) and turn template
++# authoring into arbitrary code execution / cross-tenant data access, so we
++# render inside a SandboxedEnvironment, which blocks access to unsafe
++# attributes/callables while leaving the ordinary conveniences (filters,
++# conditionals, etc.) that operators expect intact.
++#
++# The environment is built once and reused; it holds no per-render state.
++# Autoescaping stays off: these are plain-text subject lines / Slack / e-mail
++# bodies, not HTML, so operators get the literal characters they typed.
++_ENV = SandboxedEnvironment(autoescape=False)
++
++
+ def render_notification(template_source: str, alert: Alert) -> str:
+     """Render ``template_source`` (an operator-authored Jinja2 template) against
+     ``alert`` and return the delivered notification text.
+@@ -41,4 +58,5 @@ def render_notification(template_source: str, alert: Alert) -> str:
+     ``template_source`` comes from the per-team template the operator saved in
+     the UI. ``alert`` is the :class:`Alert` that fired.
+     """
+-    raise NotImplementedError
++    template = _ENV.from_string(template_source)
++    return template.render(alert=alert)
