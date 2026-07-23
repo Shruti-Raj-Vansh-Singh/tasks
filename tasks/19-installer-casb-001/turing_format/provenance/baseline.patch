@@ -1,0 +1,291 @@
+diff --git a/INSTALL_TASK.md b/INSTALL_TASK.md
+new file mode 100644
+index 0000000..67caac9
+--- /dev/null
++++ b/INSTALL_TASK.md
+@@ -0,0 +1,61 @@
++# Wire up "install a wheel into scheme directories"
++
++We install Python wheels into scheme directories in a few different tools -- a
++lightweight vendoring step, a plugin loader, a test-fixture installer -- and each
++one has grown its own copy of the same unpack loop. I've started a single home
++for it in `iw/apply.py`. The function is declared and documented there; right now
++`install_wheel` just raises `NotImplementedError`. Please fill it in.
++
++## What it's for
++
++A tool has a `.whl` file and a set of target directories (one per install
++scheme) and wants to install the wheel into them. Instead of each tool
++re-implementing the zip handling and the per-file writing, it calls one function:
++
++```python
++from iw.apply import install_wheel
++
++report = install_wheel(wheel_path, scheme_dirs)
++```
++
++`wheel_path` is a path to a `.whl` file -- a zip archive laid out per the wheel
++spec: the package's files plus a `*.dist-info/` directory holding `METADATA`,
++`WHEEL`, and `RECORD`. `scheme_dirs` is a dict mapping scheme names
++(`"purelib"`, `"platlib"`, `"headers"`, `"scripts"`, `"data"`) to the directory
++each scheme installs into. The call writes the wheel's files into those
++directories and returns a `report` describing what was installed.
++
++## What `install_wheel` should do
++
++- Open the wheel and install its contents into the scheme directories.
++- Return a report describing what was installed: a list of the installed files,
++  each with its `path`, `hash`, and `size`, so a caller can see what landed.
++
++## Use the `installer` library
++
++The environment has [`installer`](https://installer.pypa.io/) available -- it is
++the reference implementation pip uses to install wheels. Build on it rather than
++hand-rolling zip handling:
++
++- `installer.sources.WheelFile.open(path)` -> a context manager giving a wheel
++  source. It exposes `.dist_info_dir`, `.dist_info_filenames`,
++  `.read_dist_info(name)`, and `.get_contents()` (an iterator over the wheel's
++  entries; each yields a `(path, hash, size)` record element, a byte stream, and
++  an is-executable flag).
++- `installer.destinations.SchemeDictionaryDestination(scheme_dict, interpreter,
++  script_kind)` -> a destination that writes files into the scheme directories.
++- `installer.install(source, destination, additional_metadata)` -> drives the
++  install, writing every entry into the destination.
++
++See `docs/installing.rst` for a walkthrough of the API and the report shape.
++
++## Checking your work
++
++There are a handful of ordinary cases in `iw_tests/test_install.py`:
++
++```
++python -m pytest iw_tests/test_install.py -q
++```
++
++The `iw` package is importable from the repo root, so you can exercise your
++implementation directly too. Thanks!
+diff --git a/docs/installing.rst b/docs/installing.rst
+new file mode 100644
+index 0000000..b85d868
+--- /dev/null
++++ b/docs/installing.rst
+@@ -0,0 +1,75 @@
++Installing a wheel into scheme directories
++==========================================
++
++``install_wheel(wheel_path, scheme_dirs)`` installs a wheel into a set of
++scheme directories and returns a report of what was installed. It builds on the
++``installer`` library.
++
++The wheel source
++----------------
++
++Open a wheel with :func:`installer.sources.WheelFile.open`, which is a context
++manager::
++
++    from installer.sources import WheelFile
++
++    with WheelFile.open(wheel_path) as source:
++        ...
++
++A :class:`WheelFile` exposes:
++
++``dist_info_dir``
++    The ``*.dist-info`` directory name for the wheel.
++
++``dist_info_filenames``
++    The list of files inside ``dist-info`` (e.g. ``METADATA``, ``WHEEL``,
++    ``RECORD``, and ``entry_points.txt`` if present).
++
++``read_dist_info(name)``
++    Return the text of a ``dist-info`` file, e.g.
++    ``source.read_dist_info("RECORD")``.
++
++``get_contents()``
++    Iterate the wheel's entries. Each iteration yields a triple
++    ``(record_element, stream, is_executable)`` where ``record_element`` is a
++    ``(path, hash, size)`` tuple taken from ``RECORD`` and ``stream`` is an open
++    binary stream of the entry's bytes.
++
++The ``RECORD`` file lists one row per file in the wheel as ``path,hash,size`` --
++``hash`` is a ``sha256=<value>`` string and ``size`` is the byte length. It is
++the wheel's manifest of contents.
++
++The destination
++---------------
++
++Create a :class:`installer.destinations.SchemeDictionaryDestination` from your
++``scheme_dirs`` mapping::
++
++    from installer.destinations import SchemeDictionaryDestination
++
++    destination = SchemeDictionaryDestination(
++        scheme_dict=scheme_dirs,
++        interpreter="/usr/bin/python3",
++        script_kind="posix",
++    )
++
++The destination decides which scheme directory each entry lands in and writes
++the bytes there, returning a record entry for each file it wrote.
++
++Driving the install
++--------------------
++
++:func:`installer.install` walks the source and writes every entry into the
++destination::
++
++    from installer import install
++
++    install(source=source, destination=destination, additional_metadata={})
++
++The report
++----------
++
++Return a report of the installed files. Each entry should carry the file's
++``path``, its ``hash``, and its ``size`` so a caller can see what landed. The
++``record_element`` tuples from ``get_contents()`` carry exactly these three
++fields.
+diff --git a/iw/__init__.py b/iw/__init__.py
+new file mode 100644
+index 0000000..2dd9609
+--- /dev/null
++++ b/iw/__init__.py
+@@ -0,0 +1,5 @@
++"""iw -- a small wheel-install helper built on the ``installer`` library."""
++
++from iw.apply import install_wheel
++
++__all__ = ["install_wheel"]
+diff --git a/iw/apply.py b/iw/apply.py
+new file mode 100644
+index 0000000..2d31726
+--- /dev/null
++++ b/iw/apply.py
+@@ -0,0 +1,20 @@
++# -*- coding: utf-8 -*-
++"""Install a wheel into scheme directories.
++
++See ``docs/installing.rst`` and the task prompt for the intended behaviour.
++"""
++
++from __future__ import annotations
++
++
++def install_wheel(wheel_path, scheme_dirs):
++    """Install the wheel at *wheel_path* into *scheme_dirs*.
++
++    :param wheel_path: path to a ``.whl`` file.
++    :param scheme_dirs: dict mapping scheme names (``"purelib"``, ``"platlib"``,
++        ``"headers"``, ``"scripts"``, ``"data"``) to the directory each scheme
++        installs into.
++    :returns: a report of the installed files -- a list in which each installed
++        file carries its ``path``, ``hash``, and ``size``.
++    """
++    raise NotImplementedError("install_wheel is not implemented yet")
+diff --git a/iw_tests/__init__.py b/iw_tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/iw_tests/test_install.py b/iw_tests/test_install.py
+new file mode 100644
+index 0000000..be7dfe1
+--- /dev/null
++++ b/iw_tests/test_install.py
+@@ -0,0 +1,97 @@
++"""Visible tests for install_wheel -- ordinary, well-formed wheels only.
++
++Each test builds a small, valid wheel whose files match its ``RECORD`` manifest
++and checks that ``install_wheel`` writes the files into the ``purelib`` scheme
++directory and returns a report that lists them. Any correct implementation
++passes; nothing here is adversarial.
++"""
++
++import base64
++import hashlib
++import os
++import zipfile
++
++import pytest
++
++from iw.apply import install_wheel
++
++
++def _hash(data):
++    d = hashlib.sha256(data).digest()
++    return "sha256=" + base64.urlsafe_b64encode(d).rstrip(b"=").decode()
++
++
++def _build(path, dist, files):
++    """Write a valid wheel containing *files* ({archive_path: bytes})."""
++    di = f"{dist}-1.0.dist-info"
++    meta = f"Metadata-Version: 2.1\nName: {dist}\nVersion: 1.0\n".encode()
++    wheel = (
++        "Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
++    ).encode()
++    rows = [f"{p},{_hash(b)},{len(b)}" for p, b in files.items()]
++    rows.append(f"{di}/METADATA,{_hash(meta)},{len(meta)}")
++    rows.append(f"{di}/WHEEL,{_hash(wheel)},{len(wheel)}")
++    rows.append(f"{di}/RECORD,,")
++    rec = ("\n".join(rows) + "\n").encode()
++    with zipfile.ZipFile(path, "w") as zf:
++        for p, b in files.items():
++            zf.writestr(p, b)
++        zf.writestr(f"{di}/METADATA", meta)
++        zf.writestr(f"{di}/WHEEL", wheel)
++        zf.writestr(f"{di}/RECORD", rec)
++    return str(path)
++
++
++def _schemes(root):
++    d = {k: os.path.join(root, k) for k in
++         ("purelib", "platlib", "headers", "scripts", "data")}
++    for p in d.values():
++        os.makedirs(p, exist_ok=True)
++    return d
++
++
++def test_single_file_installed(tmp_path):
++    whl = _build(tmp_path / "a-1.0-py3-none-any.whl", "a",
++                 {"a/__init__.py": b"X = 1\n"})
++    dirs = _schemes(str(tmp_path / "t"))
++    install_wheel(whl, dirs)
++    with open(os.path.join(dirs["purelib"], "a", "__init__.py"), "rb") as f:
++        assert f.read() == b"X = 1\n"
++
++
++def test_multiple_files_installed(tmp_path):
++    whl = _build(tmp_path / "b-1.0-py3-none-any.whl", "b",
++                 {"b/__init__.py": b"Y = 2\n", "b/util.py": b"def g():\n    return 3\n"})
++    dirs = _schemes(str(tmp_path / "t"))
++    install_wheel(whl, dirs)
++    base = os.path.join(dirs["purelib"], "b")
++    assert os.path.exists(os.path.join(base, "__init__.py"))
++    assert os.path.exists(os.path.join(base, "util.py"))
++
++
++def test_report_lists_files(tmp_path):
++    whl = _build(tmp_path / "c-1.0-py3-none-any.whl", "c",
++                 {"c/__init__.py": b"Z = 4\n"})
++    dirs = _schemes(str(tmp_path / "t"))
++    report = install_wheel(whl, dirs)
++    text = repr(report)
++    assert "c/__init__.py" in text
++
++
++def test_report_has_hash_and_size(tmp_path):
++    data = b"WORD = 42\n"
++    whl = _build(tmp_path / "d-1.0-py3-none-any.whl", "d",
++                 {"d/__init__.py": data})
++    dirs = _schemes(str(tmp_path / "t"))
++    report = install_wheel(whl, dirs)
++    text = repr(report)
++    assert str(len(data)) in text  # size present somewhere
++    assert "sha256=" in text       # hash present somewhere
++
++
++def test_nested_package(tmp_path):
++    whl = _build(tmp_path / "e-1.0-py3-none-any.whl", "e",
++                 {"e/__init__.py": b"", "e/sub/__init__.py": b"N = 1\n"})
++    dirs = _schemes(str(tmp_path / "t"))
++    install_wheel(whl, dirs)
++    assert os.path.exists(os.path.join(dirs["purelib"], "e", "sub", "__init__.py"))

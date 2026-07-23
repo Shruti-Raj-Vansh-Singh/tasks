@@ -1,0 +1,178 @@
+diff --git a/iw/apply.py b/iw/apply.py
+index 2d31726..ff506f8 100644
+--- a/iw/apply.py
++++ b/iw/apply.py
+@@ -1,20 +1,167 @@
+ # -*- coding: utf-8 -*-
+ """Install a wheel into scheme directories.
+ 
+-See ``docs/installing.rst`` and the task prompt for the intended behaviour.
++See docs/installing.rst and INSTALL_TASK.md.
+ """
+ 
+ from __future__ import annotations
+ 
++import os
++import sys
++from dataclasses import dataclass
++
++from installer import install
++from installer.destinations import SchemeDictionaryDestination
++from installer.records import RecordEntry
++from installer.utils import Scheme, get_launcher_kind
++
++# The scheme names a wheel may install into, per PEP 427.
++_SCHEME_NAMES = ("purelib", "platlib", "headers", "scripts", "data")
++
++
++@dataclass(frozen=True)
++class InstalledFile:
++    """A single file that was written during a wheel install.
++
++    :ivar path: the file's path inside its scheme directory (as recorded in
++        RECORD, using forward slashes).
++    :ivar scheme: the scheme the file was installed into (``"purelib"``,
++        ``"scripts"``, ...).
++    :ivar hash: the file's hash as a ``"<algorithm>=<value>"`` string, or
++        ``None`` for entries that carry no hash (e.g. the RECORD file itself).
++    :ivar size: the file's size in bytes, or ``None`` if not recorded.
++    """
++
++    path: str
++    scheme: str
++    hash: str | None
++    size: int | None
++
++
++@dataclass
++class InstallReport:
++    """Report of a completed wheel install.
++
++    :ivar distribution: the wheel's distribution name.
++    :ivar version: the wheel's version.
++    :ivar files: the files that were written, in install order.
++    """
++
++    distribution: str
++    version: str
++    files: list[InstalledFile]
++
++    def __iter__(self):
++        # Convenience: iterating the report yields its installed files, so
++        # callers can treat it as the "list of installed files" directly.
++        return iter(self.files)
++
++    def __len__(self):
++        return len(self.files)
++
++
++class _RecordingDestination(SchemeDictionaryDestination):
++    """A destination that remembers every record it writes.
++
++    ``installer.install`` does not return the records it collects, so we
++    capture them here as files are written. Each captured record reflects what
++    actually landed on disk (its path, and the hash/size of the bytes written),
++    which is exactly what the install report needs.
++    """
++
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        self.records: list[tuple[Scheme, RecordEntry]] = []
++
++    def write_file(self, scheme, path, stream, is_executable):
++        record = super().write_file(
++            scheme=scheme,
++            path=path,
++            stream=stream,
++            is_executable=is_executable,
++        )
++        self.records.append((scheme, record))
++        return record
++
++    def write_script(self, name, module, attr, section):
++        record = super().write_script(
++            name=name, module=module, attr=attr, section=section
++        )
++        self.records.append((Scheme("scripts"), record))
++        return record
++
++
++def _validate_scheme_dirs(scheme_dirs):
++    """Return a plain ``{scheme: path}`` dict, validating the mapping."""
++    if not isinstance(scheme_dirs, dict):
++        raise TypeError(
++            f"scheme_dirs must be a dict of scheme -> directory, "
++            f"got {type(scheme_dirs).__name__}"
++        )
++
++    missing = [name for name in _SCHEME_NAMES if name not in scheme_dirs]
++    if missing:
++        raise ValueError(
++            "scheme_dirs is missing required scheme(s): " + ", ".join(missing)
++        )
++
++    unknown = [name for name in scheme_dirs if name not in _SCHEME_NAMES]
++    if unknown:
++        raise ValueError(
++            "scheme_dirs contains unknown scheme(s): " + ", ".join(sorted(unknown))
++        )
++
++    # SchemeDictionaryDestination indexes with plain str scheme names.
++    return {name: os.fspath(scheme_dirs[name]) for name in _SCHEME_NAMES}
++
+ 
+ def install_wheel(wheel_path, scheme_dirs):
+     """Install the wheel at *wheel_path* into *scheme_dirs*.
+ 
+     :param wheel_path: path to a ``.whl`` file.
+     :param scheme_dirs: dict mapping scheme names (``"purelib"``, ``"platlib"``,
+-        ``"headers"``, ``"scripts"``, ``"data"``) to the directory each scheme
+-        installs into.
+-    :returns: a report of the installed files -- a list in which each installed
+-        file carries its ``path``, ``hash``, and ``size``.
++        ``"headers"``, ``"scripts"``, ``"data"``) to the target directory for
++        each scheme.
++    :returns: an :class:`InstallReport` describing the files that were written.
++        Each :class:`InstalledFile` carries its ``path``, ``scheme``, ``hash``
++        and ``size``.
++    :raises TypeError: if *scheme_dirs* is not a dict.
++    :raises ValueError: if *scheme_dirs* is missing a scheme or has an unknown
++        one.
+     """
+-    raise NotImplementedError("install_wheel is not implemented yet")
++    resolved_dirs = _validate_scheme_dirs(scheme_dirs)
++
++    destination = _RecordingDestination(
++        scheme_dict=resolved_dirs,
++        interpreter=sys.executable,
++        script_kind=get_launcher_kind(),
++    )
++
++    # Import here so the dependency is only needed when actually installing,
++    # and keep it local to make the source-open lifetime explicit.
++    from installer.sources import WheelFile
++
++    with WheelFile.open(wheel_path) as source:
++        install(
++            source=source,
++            destination=destination,
++            additional_metadata={},
++        )
++        distribution = source.distribution
++        version = source.version
++
++    files = [
++        InstalledFile(
++            path=record.path,
++            scheme=str(scheme),
++            hash=(str(record.hash_) if record.hash_ is not None else None),
++            size=record.size,
++        )
++        for scheme, record in destination.records
++    ]
++
++    return InstallReport(
++        distribution=distribution,
++        version=version,
++        files=files,
++    )

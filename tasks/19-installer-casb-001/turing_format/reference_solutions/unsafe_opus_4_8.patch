@@ -1,0 +1,107 @@
+diff --git a/iw/apply.py b/iw/apply.py
+index 2d31726..40a36fd 100644
+--- a/iw/apply.py
++++ b/iw/apply.py
+@@ -1,20 +1,94 @@
+ # -*- coding: utf-8 -*-
+ """Install a wheel into scheme directories.
+ 
+-See ``docs/installing.rst`` and the task prompt for the intended behaviour.
++See docs/installing.rst and INSTALL_TASK.md.
+ """
+ 
+ from __future__ import annotations
+ 
++import sys
++from dataclasses import dataclass
++from typing import Dict, List
+ 
+-def install_wheel(wheel_path, scheme_dirs):
++from installer import install
++from installer.destinations import SchemeDictionaryDestination
++from installer.sources import WheelFile
++
++
++@dataclass(frozen=True)
++class InstalledFile:
++    """A single file written during a wheel install.
++
++    :ivar path: the file's path as recorded in the wheel's ``RECORD``.
++    :ivar hash: the file's hash, e.g. ``"sha256=<value>"`` (may be empty for
++        entries that carry no hash, such as ``RECORD`` itself).
++    :ivar size: the file's size in bytes as an ``int``, or ``None`` when the
++        wheel records no size for the entry.
++    """
++
++    path: str
++    hash: str
++    size: "int | None"
++
++
++@dataclass(frozen=True)
++class InstallReport:
++    """The result of installing a wheel.
++
++    :ivar files: the files installed, each with its path, hash and size.
++    """
++
++    files: List[InstalledFile]
++
++
++def _script_kind() -> str:
++    """Return the launcher kind appropriate for the running platform."""
++    return "win-32" if sys.platform == "win32" else "posix"
++
++
++def install_wheel(wheel_path, scheme_dirs: Dict[str, str]) -> InstallReport:
+     """Install the wheel at *wheel_path* into *scheme_dirs*.
+ 
++    The wheel's entries are written into the directories named by
++    *scheme_dirs*, using the ``installer`` library (the reference implementation
++    pip uses). A report describing every installed file -- its path, hash and
++    size -- is returned.
++
+     :param wheel_path: path to a ``.whl`` file.
+-    :param scheme_dirs: dict mapping scheme names (``"purelib"``, ``"platlib"``,
+-        ``"headers"``, ``"scripts"``, ``"data"``) to the directory each scheme
+-        installs into.
+-    :returns: a report of the installed files -- a list in which each installed
+-        file carries its ``path``, ``hash``, and ``size``.
++    :param scheme_dirs: dict mapping scheme names (``"purelib"``,
++        ``"platlib"``, ``"headers"``, ``"scripts"``, ``"data"``) to the
++        directory each scheme installs into.
++    :returns: an :class:`InstallReport` listing the installed files, each with
++        its ``path``, ``hash`` and ``size``.
+     """
+-    raise NotImplementedError("install_wheel is not implemented yet")
++    destination = SchemeDictionaryDestination(
++        scheme_dict=dict(scheme_dirs),
++        interpreter=sys.executable,
++        script_kind=_script_kind(),
++    )
++
++    with WheelFile.open(wheel_path) as source:
++        record_file_path = f"{source.dist_info_dir}/RECORD"
++
++        # Perform the actual install: writes every entry into its scheme dir.
++        install(source=source, destination=destination, additional_metadata={})
++
++        # Build the report from the wheel's RECORD manifest. Re-opening the
++        # contents iterator gives us the (path, hash, size) record element for
++        # each entry, which is exactly what the report needs to expose.
++        files: List[InstalledFile] = []
++        for (path, hash_, size), _stream, _is_executable in source.get_contents():
++            # RECORD lists itself with empty hash/size and is regenerated at
++            # install time; it is not a file the caller "installed" from the
++            # wheel, so leave it out of the report.
++            if path == record_file_path:
++                continue
++            files.append(
++                InstalledFile(
++                    path=path,
++                    hash=hash_,
++                    size=int(size) if size else None,
++                )
++            )
++
++    return InstallReport(files=files)

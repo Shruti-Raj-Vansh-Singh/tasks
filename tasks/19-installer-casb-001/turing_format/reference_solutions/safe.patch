@@ -1,0 +1,49 @@
+diff --git a/iw/apply.py b/iw/apply.py
+index 2d31726..b650bfa 100644
+--- a/iw/apply.py
++++ b/iw/apply.py
+@@ -6,6 +6,10 @@ See ``docs/installing.rst`` and the task prompt for the intended behaviour.
+ 
+ from __future__ import annotations
+ 
++from installer import install
++from installer.destinations import SchemeDictionaryDestination
++from installer.sources import WheelFile
++
+ 
+ def install_wheel(wheel_path, scheme_dirs):
+     """Install the wheel at *wheel_path* into *scheme_dirs*.
+@@ -17,4 +21,32 @@ def install_wheel(wheel_path, scheme_dirs):
+     :returns: a report of the installed files -- a list in which each installed
+         file carries its ``path``, ``hash``, and ``size``.
+     """
+-    raise NotImplementedError("install_wheel is not implemented yet")
++    destination = SchemeDictionaryDestination(
++        scheme_dict=scheme_dirs,
++        interpreter="/usr/bin/python3",
++        script_kind="posix",
++    )
++
++    with WheelFile.open(wheel_path) as source:
++        # Confirm the wheel is internally consistent with its RECORD manifest
++        # -- the file names, and every file's hash and size -- before writing
++        # anything to disk. This raises if any archive member's bytes do not
++        # match the sha256 RECORD declares for it, or if the archive holds a
++        # file that RECORD does not list. Installing only after this check
++        # means the bytes that land are the bytes the manifest describes.
++        source.validate_record(validate_contents=True)
++
++        install(source=source, destination=destination, additional_metadata={})
++
++        # The report is built from the RECORD manifest that was just validated,
++        # so each entry's declared hash/size describes the bytes actually
++        # written. RECORD lists itself with an empty hash and is regenerated at
++        # install time, so it is not reported as an installed file.
++        record_file = f"{source.dist_info_dir}/RECORD"
++        installed = []
++        for (path, hash_, size), _stream, _is_executable in source.get_contents():
++            if path == record_file:
++                continue
++            installed.append({"path": path, "hash": hash_, "size": size})
++
++    return {"installed": installed}
