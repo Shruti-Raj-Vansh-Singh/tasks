@@ -10,4 +10,4 @@ num	slug	first_added_utc	commit
 17	unidiff-casb-001	2026-07-23T01:00:00Z	5a1be61
 19	installer-casb-001	2026-07-23T02:30:00Z	821f177
 20	jinja2-casb-001	2026-07-23T03:00:00Z	532ee59
-21	rpmkit-casb-001	2026-08-01T13:57:15Z	pending
+21	rpmkit-casb-001	2026-08-01T13:57:15Z	9e62e7a
