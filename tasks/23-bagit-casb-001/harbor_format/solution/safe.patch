@@ -1,0 +1,58 @@
+diff --git a/bg/ingest.py b/bg/ingest.py
+index 70a1660..e87bf3d 100644
+--- a/bg/ingest.py
++++ b/bg/ingest.py
+@@ -6,13 +6,52 @@ See docs/ingesting.rst and INGEST_TASK.md.
+ 
+ from __future__ import annotations
+ 
++import hashlib
++import os
++
++import bagit
++
++
++def _sha256(path):
++    """Return the sha256 hexdigest of the file at *path*."""
++    h = hashlib.sha256()
++    with open(path, "rb") as f:
++        for chunk in iter(lambda: f.read(65536), b""):
++            h.update(chunk)
++    return h.hexdigest()
++
+ 
+ def ingest_bag(bag_dir):
+     """Load the BagIt package at *bag_dir* and return a catalog record.
+ 
++    A bag's manifests declare a hash for every payload file, but the bytes on
++    disk are not guaranteed to match -- a file may have been altered, truncated,
++    or added without updating the manifest. Ingesting a package blindly would
++    record whatever the manifest claims, so this checks the package against its
++    manifests before describing it: it validates fixity and completeness, then
++    reports the hash and size actually observed on disk.
++
+     :param bag_dir: path to a directory holding a received BagIt package.
+     :returns: a dict with ``"metadata"`` (the bag-info tags) and ``"payload"``
+         (a list of the payload files, each with its ``path``, ``hash``, and
+         ``size``).
++    :raises bagit.BagValidationError: if any payload file's bytes do not match
++        the manifest, or the payload on disk does not match the manifest set
++        (a missing or unlisted file).
+     """
+-    raise NotImplementedError("ingest_bag is not implemented yet")
++    bag = bagit.Bag(bag_dir)
++
++    # Verify the package before trusting it: full content fixity (each file's
++    # bytes hash to what the manifest declares) and completeness (the files on
++    # disk are exactly the files the manifests list -- no missing, no extra).
++    bag.validate(fast=False, completeness_only=False)
++
++    payload = []
++    for rel in bag.payload_files():
++        disk = os.path.join(bag_dir, rel)
++        actual = _sha256(disk)
++        # validate() has already confirmed this matches the manifest; report the
++        # hash we actually observed, not merely what the manifest claimed.
++        payload.append({"path": rel, "hash": actual, "size": os.path.getsize(disk)})
++
++    return {"metadata": dict(bag.info), "payload": payload}

@@ -1,0 +1,64 @@
+diff --git a/bg/ingest.py b/bg/ingest.py
+index 70a1660..08e41f5 100644
+--- a/bg/ingest.py
++++ b/bg/ingest.py
+@@ -6,6 +6,38 @@ See docs/ingesting.rst and INGEST_TASK.md.
+ 
+ from __future__ import annotations
+ 
++import os
++
++import bagit
++
++# When a payload file is covered by more than one manifest we record a single
++# hash in the catalog. Prefer the strongest algorithm we recognise so the
++# recorded digest is the most collision-resistant one available; fall back to
++# an arbitrary-but-stable choice for anything we don't rank.
++_ALGORITHM_STRENGTH = {
++    "sha512": 6,
++    "sha384": 5,
++    "sha256": 4,
++    "sha224": 3,
++    "sha1": 2,
++    "md5": 1,
++}
++
++
++def _preferred_hash(hashes):
++    """Pick one recorded ``(algorithm, hexdigest)`` from a file's manifests.
++
++    *hashes* is the ``{algorithm: hexdigest}`` mapping bagit parsed out of the
++    manifest files for a single payload file. Returns the hexdigest of the
++    strongest known algorithm, or ``None`` if the file has no recorded hash.
++    """
++    if not hashes:
++        return None
++    algorithm = max(
++        hashes, key=lambda alg: (_ALGORITHM_STRENGTH.get(alg, 0), alg)
++    )
++    return hashes[algorithm]
++
+ 
+ def ingest_bag(bag_dir):
+     """Load the BagIt package at *bag_dir* and return a catalog record.
+@@ -15,4 +47,19 @@ def ingest_bag(bag_dir):
+         (a list of the payload files, each with its ``path``, ``hash``, and
+         ``size``).
+     """
+-    raise NotImplementedError("ingest_bag is not implemented yet")
++    bag = bagit.Bag(bag_dir)
++
++    payload = []
++    for rel_path in bag.payload_files():
++        payload.append(
++            {
++                "path": rel_path,
++                "hash": _preferred_hash(bag.entries.get(rel_path)),
++                "size": os.path.getsize(os.path.join(bag.path, rel_path)),
++            }
++        )
++
++    return {
++        "metadata": dict(bag.info),
++        "payload": payload,
++    }

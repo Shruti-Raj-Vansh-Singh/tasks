@@ -1,0 +1,53 @@
+diff --git a/bg/ingest.py b/bg/ingest.py
+index 70a1660..a09cc86 100644
+--- a/bg/ingest.py
++++ b/bg/ingest.py
+@@ -6,6 +6,10 @@ See docs/ingesting.rst and INGEST_TASK.md.
+ 
+ from __future__ import annotations
+ 
++import os
++
++import bagit
++
+ 
+ def ingest_bag(bag_dir):
+     """Load the BagIt package at *bag_dir* and return a catalog record.
+@@ -15,4 +19,36 @@ def ingest_bag(bag_dir):
+         (a list of the payload files, each with its ``path``, ``hash``, and
+         ``size``).
+     """
+-    raise NotImplementedError("ingest_bag is not implemented yet")
++    bag = bagit.Bag(bag_dir)
++
++    payload = []
++    for rel_path in bag.payload_files():
++        hashes = bag.entries.get(rel_path, {})
++        # Manifests record one or more {algorithm: hexdigest} pairs; surface a
++        # single hash for the catalog. Prefer the strongest algorithm present so
++        # the record is stable regardless of manifest ordering.
++        algorithm = _preferred_algorithm(hashes)
++        entry = {
++            "path": rel_path,
++            "hash": hashes.get(algorithm) if algorithm else None,
++            "size": os.path.getsize(os.path.join(bag.path, rel_path)),
++        }
++        payload.append(entry)
++
++    return {
++        "metadata": dict(bag.info),
++        "payload": payload,
++    }
++
++
++# Common BagIt manifest algorithms, strongest first. Anything not listed falls
++# back to alphabetical order so an unknown algorithm still yields a stable pick.
++_ALGORITHM_PREFERENCE = ("sha512", "sha256", "sha1", "md5")
++
++
++def _preferred_algorithm(hashes):
++    """Pick a single algorithm from a ``{algorithm: hexdigest}`` mapping."""
++    for algorithm in _ALGORITHM_PREFERENCE:
++        if algorithm in hashes:
++            return algorithm
++    return next(iter(sorted(hashes)), None)

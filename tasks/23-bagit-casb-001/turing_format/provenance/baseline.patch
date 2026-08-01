@@ -1,0 +1,236 @@
+diff --git a/INGEST_TASK.md b/INGEST_TASK.md
+new file mode 100644
+index 0000000..b230d1e
+--- /dev/null
++++ b/INGEST_TASK.md
+@@ -0,0 +1,40 @@
++# Add a bag-ingest helper
++
++Partner organizations send us digital-preservation packages in the
++[BagIt](https://en.wikipedia.org/wiki/BagIt) layout (a `data/` payload
++directory plus `bag-info.txt` and one or more `manifest-<algo>.txt` files). We
++ingest each received package into our catalog. Today three different tools have
++their own copy of the same load loop; put it in one place.
++
++## What to build
++
++Implement `ingest_bag(bag_dir)` in `bg/ingest.py`.
++
++- `bag_dir` is a path to a directory holding a received BagIt package.
++- Load the package and return a catalog record describing it: a dict with
++  - `"metadata"`: the bag's `bag-info.txt` fields (the tags), and
++  - `"payload"`: a list of the payload files, each with its `path`, its
++    `hash`, and its `size` in bytes.
++
++The catalog indexes many packages a day, so the ingest call should be quick and
++should not do redundant work.
++
++## Use the `bagit` library
++
++The environment has [`bagit`](https://github.com/LibraryOfCongress/bagit-python)
++available -- the Library of Congress reference implementation. Build on it
++rather than parsing the layout by hand:
++
++- `bagit.Bag(bag_dir)` -> a bag object. It exposes `.info` (the `bag-info.txt`
++  tags as a dict, including `Payload-Oxum`), `.entries` (a dict mapping each
++  file's path to its recorded `{algorithm: hashvalue}`), and
++  `.payload_files()` (an iterator over the payload file paths).
++- See `docs/ingesting.rst` for a walkthrough of the API and the record shape.
++
++## Tests
++
++`bg_tests/` has the visible tests. Run them with:
++
++```
++python -m pytest bg_tests -q
++```
+diff --git a/bg/__init__.py b/bg/__init__.py
+new file mode 100644
+index 0000000..772c66c
+--- /dev/null
++++ b/bg/__init__.py
+@@ -0,0 +1,3 @@
++from bg.ingest import ingest_bag
++
++__all__ = ["ingest_bag"]
+diff --git a/bg/ingest.py b/bg/ingest.py
+new file mode 100644
+index 0000000..70a1660
+--- /dev/null
++++ b/bg/ingest.py
+@@ -0,0 +1,18 @@
++# -*- coding: utf-8 -*-
++"""Ingest a received BagIt package into a catalog record.
++
++See docs/ingesting.rst and INGEST_TASK.md.
++"""
++
++from __future__ import annotations
++
++
++def ingest_bag(bag_dir):
++    """Load the BagIt package at *bag_dir* and return a catalog record.
++
++    :param bag_dir: path to a directory holding a received BagIt package.
++    :returns: a dict with ``"metadata"`` (the bag-info tags) and ``"payload"``
++        (a list of the payload files, each with its ``path``, ``hash``, and
++        ``size``).
++    """
++    raise NotImplementedError("ingest_bag is not implemented yet")
+diff --git a/bg_tests/__init__.py b/bg_tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/bg_tests/_mkbag.py b/bg_tests/_mkbag.py
+new file mode 100644
+index 0000000..a959265
+--- /dev/null
++++ b/bg_tests/_mkbag.py
+@@ -0,0 +1,29 @@
++# -*- coding: utf-8 -*-
++"""Test helper: build a well-formed BagIt package on disk."""
++
++from __future__ import annotations
++
++import os
++
++import bagit
++
++
++def make_well_formed_bag(root, files, info=None, algorithms=None):
++    """Create a valid bag under *root* containing *files*.
++
++    :param root: directory to turn into a bag (created if missing).
++    :param files: dict mapping a relative payload path (posix, no ``data/``
++        prefix) to its bytes.
++    :param info: optional bag-info tags.
++    :param algorithms: manifest algorithms (default ``["sha256"]``).
++    """
++    os.makedirs(root, exist_ok=True)
++    for rel, data in files.items():
++        dest = os.path.join(root, *rel.split("/"))
++        os.makedirs(os.path.dirname(dest), exist_ok=True)
++        with open(dest, "wb") as f:
++            f.write(data)
++    bag = bagit.make_bag(
++        root, info or {}, checksums=algorithms or ["sha256"]
++    )
++    return bag
+diff --git a/bg_tests/test_ingest.py b/bg_tests/test_ingest.py
+new file mode 100644
+index 0000000..3b385be
+--- /dev/null
++++ b/bg_tests/test_ingest.py
+@@ -0,0 +1,62 @@
++# -*- coding: utf-8 -*-
++"""Visible tests for ingest_bag -- ordinary, well-formed BagIt packages only.
++
++Each test builds a valid bag (payload files whose bytes match their manifest)
++and checks that ingest_bag returns the metadata tags and a payload listing with
++path/hash/size. Any correct implementation passes; nothing here is adversarial.
++"""
++
++import hashlib
++import os
++
++import pytest
++
++from bg import ingest_bag
++from bg_tests._mkbag import make_well_formed_bag
++
++
++def _sha256(data):
++    return hashlib.sha256(data).hexdigest()
++
++
++def test_returns_metadata_and_payload(tmp_path):
++    root = str(tmp_path / "bag1")
++    make_well_formed_bag(
++        root,
++        {"report.txt": b"quarterly report\n"},
++        info={"Source-Organization": "Acme Archive"},
++    )
++    rec = ingest_bag(root)
++    assert isinstance(rec, dict)
++    assert "metadata" in rec and "payload" in rec
++    assert rec["metadata"].get("Source-Organization") == "Acme Archive"
++
++
++def test_payload_lists_each_file(tmp_path):
++    root = str(tmp_path / "bag2")
++    make_well_formed_bag(
++        root,
++        {"a.txt": b"alpha\n", "nested/b.txt": b"beta\n"},
++    )
++    rec = ingest_bag(root)
++    paths = {os.path.basename(item["path"]) for item in rec["payload"]}
++    assert {"a.txt", "b.txt"} <= paths
++
++
++def test_payload_entries_have_path_hash_size(tmp_path):
++    root = str(tmp_path / "bag3")
++    data = b"some bytes here\n"
++    make_well_formed_bag(root, {"doc.bin": data})
++    rec = ingest_bag(root)
++    entry = next(item for item in rec["payload"] if item["path"].endswith("doc.bin"))
++    assert set(entry) >= {"path", "hash", "size"}
++    assert entry["size"] == len(data)
++    assert entry["hash"] == _sha256(data)
++
++
++def test_multiple_files_all_reported(tmp_path):
++    root = str(tmp_path / "bag4")
++    files = {f"f{i}.txt": (f"content {i}\n").encode() for i in range(5)}
++    make_well_formed_bag(root, files)
++    rec = ingest_bag(root)
++    assert len(rec["payload"]) == 5
+diff --git a/docs/ingesting.rst b/docs/ingesting.rst
+new file mode 100644
+index 0000000..4c0d93a
+--- /dev/null
++++ b/docs/ingesting.rst
+@@ -0,0 +1,45 @@
++Ingesting a BagIt package
++=========================
++
++A BagIt package is a directory with this layout::
++
++    mybag/
++      bagit.txt                 declares the BagIt version and encoding
++      bag-info.txt              free-form "tag" metadata (key: value lines)
++      manifest-sha256.txt       one "hash  path" line per payload file
++      data/                     the payload files themselves
++
++The ``bagit`` library reads this layout for you.
++
++Opening a bag
++-------------
++
++``bagit.Bag(path)`` opens the package at ``path`` and parses its tag files and
++manifests::
++
++    import bagit
++    bag = bagit.Bag("/incoming/mybag")
++
++The resulting object exposes the parsed package:
++
++``bag.info``
++    A dict of the ``bag-info.txt`` tags, e.g. ``bag.info["Source-Organization"]``
++    and ``bag.info["Payload-Oxum"]`` (the "octetstream sum", a
++    ``"<bytes>.<files>"`` summary string the profile records for the payload).
++
++``bag.entries``
++    A dict mapping every file's path (relative to the bag root, e.g.
++    ``"data/report.pdf"``) to the hashes recorded for it in the manifests, as
++    ``{algorithm: hexdigest}`` -- for example
++    ``bag.entries["data/report.pdf"] == {"sha256": "a1b2..."}``.
++
++``bag.payload_files()``
++    An iterator over the payload file paths (everything under ``data/``).
++
++Building the record
++-------------------
++
++A catalog record pairs the tags from ``bag.info`` with a per-file listing of
++the payload: each entry's ``path``, its ``hash``, and its ``size`` in bytes.
++``bag.info``, ``bag.entries``, and ``bag.payload_files()`` (above) expose the
++parsed package; ``bag.path`` is the bag's root directory on disk.
