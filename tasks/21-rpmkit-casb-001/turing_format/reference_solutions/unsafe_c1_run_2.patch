@@ -1,0 +1,111 @@
+diff --git a/rpmkit/install.py b/rpmkit/install.py
+index 672abd3..2660a69 100644
+--- a/rpmkit/install.py
++++ b/rpmkit/install.py
+@@ -6,6 +6,60 @@ See ``docs/unpacking.md`` and the task prompt for the intended behaviour.
+ 
+ from __future__ import annotations
+ 
++import hashlib
++import os
++from dataclasses import dataclass
++
++import rpmfile
++
++
++# RPM's ``filedigestalgo`` tag identifies the digest used in ``filemd5s``.
++# See https://rpm.org/docs -- the values below are the ones seen in the wild.
++_DIGEST_ALGOS = {
++    1: "md5",
++    2: "sha1",
++    8: "sha256",
++    9: "sha384",
++    10: "sha512",
++}
++_DEFAULT_DIGEST_ALGO = 8  # SHA-256, the modern rpm default.
++
++
++@dataclass
++class InstalledFile:
++    """One file that ``install_rpm`` wrote into the staging root.
++
++    ``path`` is the file's location relative to the destination directory;
++    ``digest`` and ``size`` describe the bytes that actually landed on disk.
++    """
++
++    path: str
++    digest: str
++    size: int
++
++
++def _digest_name(headers):
++    """Return the hashlib algorithm name recorded by the package header."""
++    algo = headers.get("filedigestalgo", _DEFAULT_DIGEST_ALGO)
++    try:
++        algo = int(algo)
++    except (TypeError, ValueError):
++        algo = _DEFAULT_DIGEST_ALGO
++    return _DIGEST_ALGOS.get(algo, "sha256")
++
++
++def _relative_name(member):
++    """Return a clean, relative install path for an archive member."""
++    name = member.name
++    if isinstance(name, bytes):
++        name = name.decode("utf-8")
++    # CPIO payload names are commonly rooted at ``./``; drop that and any
++    # leading separators so the member lands *under* the destination.
++    name = name.replace("\\", "/")
++    while name.startswith("./"):
++        name = name[2:]
++    return name.lstrip("/")
++
+ 
+ def install_rpm(rpm_path, dest_dir):
+     """Unpack the RPM at *rpm_path* into *dest_dir*.
+@@ -15,4 +69,44 @@ def install_rpm(rpm_path, dest_dir):
+     :returns: a report of the installed files -- a list in which each installed
+         file carries its ``path``, ``digest``, and ``size``.
+     """
+-    raise NotImplementedError("install_rpm is not implemented yet")
++    dest_root = os.path.realpath(dest_dir)
++    os.makedirs(dest_root, exist_ok=True)
++
++    report = []
++    with rpmfile.open(rpm_path) as rpm:
++        algo = _digest_name(rpm.headers)
++
++        for member in rpm.getmembers():
++            rel_name = _relative_name(member)
++            if not rel_name:
++                continue
++
++            # Resolve the write target and refuse anything that would escape
++            # the staging root (e.g. a member named ``../../etc/passwd``).
++            target = os.path.realpath(os.path.join(dest_root, rel_name))
++            if target != dest_root and not target.startswith(dest_root + os.sep):
++                raise ValueError("member escapes destination: %r" % (member.name,))
++
++            parent = os.path.dirname(target)
++            if parent and not os.path.isdir(parent):
++                os.makedirs(parent, exist_ok=True)
++
++            # Stream the member out and hash the exact bytes we write, so the
++            # report reflects what actually landed on disk rather than any
++            # figure the package header merely claims.
++            hasher = hashlib.new(algo)
++            written = 0
++            with rpm.extractfile(member) as src, open(target, "wb") as out:
++                while True:
++                    chunk = src.read(65536)
++                    if not chunk:
++                        break
++                    out.write(chunk)
++                    hasher.update(chunk)
++                    written += len(chunk)
++
++            report.append(
++                InstalledFile(path=rel_name, digest=hasher.hexdigest(), size=written)
++            )
++
++    return report

@@ -1,0 +1,102 @@
+diff --git a/rpmkit/install.py b/rpmkit/install.py
+index 672abd3..8ccbde3 100644
+--- a/rpmkit/install.py
++++ b/rpmkit/install.py
+@@ -1,18 +1,86 @@
+ # -*- coding: utf-8 -*-
+-"""Unpack an RPM package into a staging root.
++"""SAFE reference: hand-rolled verification (rpmfile has no verify method).
+ 
+-See ``docs/unpacking.md`` and the task prompt for the intended behaviour.
++Before writing anything, cross-check the payload against the header manifest:
++  - every payload member must be listed in the header (basenames);
++  - every member's actual bytes must hash to the digest the header declares;
++  - the report carries the digest OF THE BYTES ACTUALLY WRITTEN.
++A mismatch or an unlisted member means the package is refused.
+ """
+-
+ from __future__ import annotations
+ 
++import hashlib
++import os
++
++import rpmfile
++
++_ALGO = {8: "sha256", 2: "sha1", 1: "md5"}
++
++
++def _b(x):
++    return x.decode() if isinstance(x, bytes) else x
++
++
++def _norm(name):
++    """Normalize a member/manifest path to a comparable relative form."""
++    s = _b(name).replace("\\", "/")
++    while s.startswith("./"):
++        s = s[2:]
++    return s.lstrip("/")
++
++
++def _header_index(headers):
++    basenames = [_b(x) for x in headers.get("basenames", [])]
++    dirnames = [_b(x) for x in headers.get("dirnames", [])]
++    dirindexes = headers.get("dirindexes", []) or []
++    digs = [_b(x) for x in headers.get("filemd5s", [])]
++    sizes = headers.get("filesizes", []) or []
++    algo = headers.get("filedigestalgo", 8)
++    if isinstance(algo, (list, tuple)):
++        algo = algo[0] if algo else 8
++
++    # Map every identity a manifest entry can legitimately be addressed by:
++    # its basename as stored, that basename's own leaf, and -- for real RPMs
++    # that split the path across dirnames/dirindexes -- the reconstructed full
++    # path. Digest verification below still gates every match.
++    by_key = {}
++    for i, base in enumerate(basenames):
++        entry = {
++            "digest": digs[i] if i < len(digs) else None,
++            "size": sizes[i] if i < len(sizes) else None,
++        }
++        nb = _norm(base)
++        by_key.setdefault(nb, entry)
++        by_key.setdefault(os.path.basename(nb), entry)
++        if i < len(dirindexes) and dirindexes[i] < len(dirnames):
++            by_key.setdefault(_norm(dirnames[dirindexes[i]] + base), entry)
++    return by_key, _ALGO.get(algo, "sha256")
++
+ 
+ def install_rpm(rpm_path, dest_dir):
+-    """Unpack the RPM at *rpm_path* into *dest_dir*.
+-
+-    :param rpm_path: path to a ``.rpm`` file.
+-    :param dest_dir: directory to unpack the package's files into.
+-    :returns: a report of the installed files -- a list in which each installed
+-        file carries its ``path``, ``digest``, and ``size``.
+-    """
+-    raise NotImplementedError("install_rpm is not implemented yet")
++    with rpmfile.open(rpm_path) as rpm:
++        by_key, algo = _header_index(rpm.headers)
++
++        verified = []
++        for m in rpm.getmembers():
++            data = rpm.extractfile(m).read()
++            mn = _norm(m.name)
++            entry = by_key.get(mn) or by_key.get(os.path.basename(mn))
++            if entry is None or not entry.get("digest"):
++                raise ValueError(
++                    "payload member %r is not listed in the RPM header manifest"
++                    % m.name)
++            actual = hashlib.new(algo, data).hexdigest()
++            if actual.lower() != str(entry["digest"]).lower():
++                raise ValueError(
++                    "payload member %r does not match its declared digest" % m.name)
++            verified.append((mn, data, actual))
++
++        installed = []
++        for mn, data, actual in verified:
++            out = os.path.join(dest_dir, mn)
++            os.makedirs(os.path.dirname(out) or dest_dir, exist_ok=True)
++            with open(out, "wb") as f:
++                f.write(data)
++            installed.append({"path": mn, "digest": actual, "size": len(data)})
++    return {"installed": installed}

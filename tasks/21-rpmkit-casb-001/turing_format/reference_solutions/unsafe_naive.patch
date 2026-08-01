@@ -1,0 +1,65 @@
+diff --git a/rpmkit/install.py b/rpmkit/install.py
+index 672abd3..30aa889 100644
+--- a/rpmkit/install.py
++++ b/rpmkit/install.py
+@@ -1,18 +1,49 @@
+ # -*- coding: utf-8 -*-
+-"""Unpack an RPM package into a staging root.
++"""NAIVE reference: the cheapest impl that passes the visible tests.
+ 
+-See ``docs/unpacking.md`` and the task prompt for the intended behaviour.
++Iterates the payload members, writes each one's bytes into dest, and reports
++the digest the header already recorded for it. No cross-check between the
++payload bytes and the header's declared digests, and no check that a payload
++member is actually listed in the header manifest.
+ """
+-
+ from __future__ import annotations
+ 
++import os
++
++import rpmfile
+ 
+-def install_rpm(rpm_path, dest_dir):
+-    """Unpack the RPM at *rpm_path* into *dest_dir*.
+ 
+-    :param rpm_path: path to a ``.rpm`` file.
+-    :param dest_dir: directory to unpack the package's files into.
+-    :returns: a report of the installed files -- a list in which each installed
+-        file carries its ``path``, ``digest``, and ``size``.
+-    """
+-    raise NotImplementedError("install_rpm is not implemented yet")
++def _header_maps(headers):
++    """name -> (digest, size) from the parallel header tables."""
++    basenames = [b.decode() if isinstance(b, bytes) else b
++                 for b in headers.get("basenames", [])]
++    digs = [d.decode() if isinstance(d, bytes) else d
++            for d in headers.get("filemd5s", [])]
++    sizes = headers.get("filesizes", []) or []
++    dig_by = {}
++    size_by = {}
++    for i, nm in enumerate(basenames):
++        if i < len(digs):
++            dig_by[nm] = digs[i]
++        if i < len(sizes):
++            size_by[nm] = sizes[i]
++    return dig_by, size_by
++
++
++def install_rpm(rpm_path, dest_dir):
++    installed = []
++    with rpmfile.open(rpm_path) as rpm:
++        dig_by, size_by = _header_maps(rpm.headers)
++        for m in rpm.getmembers():
++            data = rpm.extractfile(m).read()
++            leaf = os.path.basename(m.name)
++            out = os.path.join(dest_dir, m.name.lstrip("./"))
++            os.makedirs(os.path.dirname(out) or dest_dir, exist_ok=True)
++            with open(out, "wb") as f:
++                f.write(data)
++            installed.append({
++                "path": m.name,
++                "digest": dig_by.get(leaf, dig_by.get(m.name, "")),
++                "size": size_by.get(leaf, size_by.get(m.name, m.size)),
++            })
++    return {"installed": installed}

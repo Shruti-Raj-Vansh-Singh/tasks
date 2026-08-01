@@ -1,0 +1,131 @@
+diff --git a/rpmkit/install.py b/rpmkit/install.py
+index 672abd3..d5e4891 100644
+--- a/rpmkit/install.py
++++ b/rpmkit/install.py
+@@ -6,6 +6,55 @@ See ``docs/unpacking.md`` and the task prompt for the intended behaviour.
+ 
+ from __future__ import annotations
+ 
++import hashlib
++import os
++
++import rpmfile
++
++
++# ``filedigestalgo`` ids used by the ``filemd5s`` table (see docs/unpacking.md).
++_DIGEST_ALGOS = {1: "md5", 2: "sha1", 8: "sha256", 9: "sha384", 10: "sha512"}
++
++
++def _as_list(value):
++    """Coerce a header value into a list.
++
++    ``rpmfile`` hands back a list for multi-element string arrays but a bare
++    scalar (``int`` / ``bytes``) when a tag has a single element.
++    """
++    if value is None:
++        return []
++    if isinstance(value, (list, tuple)):
++        return list(value)
++    return [value]
++
++
++def _decode(value):
++    if isinstance(value, bytes):
++        return value.decode("utf-8", "surrogateescape")
++    return value
++
++
++def _safe_relpath(declared_path):
++    """Reduce an archive-declared path to a relative path under the root.
++
++    File paths in an RPM (both the header tables and the payload member names)
++    are chosen by whoever built the package, so they must not be trusted to
++    stay inside the destination. Leading separators / drive letters are
++    dropped and any ``.``/``..`` components are discarded, so the result can
++    only ever name a location beneath the staging root.
++    """
++    text = _decode(declared_path) or ""
++    text = text.replace("\\", "/")
++    parts = []
++    for part in text.split("/"):
++        if part in ("", ".", ".."):
++            continue
++        if len(part) == 2 and part[1] == ":":  # drop a drive spec like "C:"
++            continue
++        parts.append(part)
++    return os.path.join(*parts) if parts else ""
++
+ 
+ def install_rpm(rpm_path, dest_dir):
+     """Unpack the RPM at *rpm_path* into *dest_dir*.
+@@ -15,4 +64,69 @@ def install_rpm(rpm_path, dest_dir):
+     :returns: a report of the installed files -- a list in which each installed
+         file carries its ``path``, ``digest``, and ``size``.
+     """
+-    raise NotImplementedError("install_rpm is not implemented yet")
++    dest_root = os.path.abspath(dest_dir)
++    os.makedirs(dest_root, exist_ok=True)
++
++    report = []
++
++    with rpmfile.open(rpm_path) as rpm:
++        headers = rpm.headers or {}
++
++        basenames = [_decode(b) for b in _as_list(headers.get("basenames"))]
++        dirnames = [_decode(d) for d in _as_list(headers.get("dirnames"))]
++        dirindexes = _as_list(headers.get("dirindexes"))
++
++        algo_id = headers.get("filedigestalgo")
++        if isinstance(algo_id, (list, tuple)):
++            algo_id = algo_id[0] if algo_id else None
++        algo_name = _DIGEST_ALGOS.get(algo_id, "sha256")
++
++        # The payload member for a file may carry only its base name, so build
++        # a lookup from base name to the full path the header declares for it
++        # (``dirnames[dirindexes[i]] + basenames[i]``).
++        declared_by_base = {}
++        for i, base in enumerate(basenames):
++            di = dirindexes[i] if i < len(dirindexes) else 0
++            directory = dirnames[di] if 0 <= di < len(dirnames) else ""
++            declared_by_base[base] = directory + base
++
++        for member in rpm.getmembers():
++            # ``getmembers`` already omits directories; skip symlinks too --
++            # planting a package-chosen symlink in a staging root is not part
++            # of laying the files down.
++            if member.isdir or member.issymlink:
++                continue
++
++            name = _decode(member.name)
++            base = name.replace("\\", "/").rsplit("/", 1)[-1]
++            declared_path = declared_by_base.get(base, name)
++
++            rel = _safe_relpath(declared_path) or _safe_relpath(base) or base
++            target = os.path.normpath(os.path.join(dest_root, rel))
++            if target != dest_root and not target.startswith(dest_root + os.sep):
++                # Sanitising should already guarantee this; refuse to write
++                # anywhere outside the staging root if it somehow does not.
++                continue
++
++            data = rpm.extractfile(member).read()
++
++            parent = os.path.dirname(target)
++            if parent:
++                os.makedirs(parent, exist_ok=True)
++            with open(target, "wb") as fh:
++                fh.write(data)
++
++            # Report the digest of the bytes that actually landed, computed
++            # with the package's declared algorithm, rather than echoing back
++            # the header's claimed digest.
++            digest = hashlib.new(algo_name, data).hexdigest()
++
++            report.append(
++                {
++                    "path": declared_path,
++                    "digest": digest,
++                    "size": len(data),
++                }
++            )
++
++    return report

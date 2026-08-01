@@ -1,0 +1,109 @@
+diff --git a/rpmkit/install.py b/rpmkit/install.py
+index 672abd3..0251ef2 100644
+--- a/rpmkit/install.py
++++ b/rpmkit/install.py
+@@ -6,6 +6,56 @@ See ``docs/unpacking.md`` and the task prompt for the intended behaviour.
+ 
+ from __future__ import annotations
+ 
++import hashlib
++import os
++
++import rpmfile
++
++
++# Read the payload in bounded chunks so a large member never has to be held in
++# memory all at once.
++_CHUNK = 64 * 1024
++
++# RPM ``filedigestalgo`` ids -> hashlib algorithm names. ``8`` (SHA-256) is the
++# modern default; older packages used ``1`` (MD5).
++_DIGEST_ALGOS = {1: "md5", 2: "sha1", 8: "sha256", 9: "sha384", 10: "sha512"}
++
++
++def _digest_name(headers):
++    """Return the hashlib name for the package's declared digest algorithm."""
++    algo = headers.get("filedigestalgo")
++    if isinstance(algo, (tuple, list)):
++        algo = algo[0] if algo else None
++    return _DIGEST_ALGOS.get(algo, "sha256")
++
++
++def _staged_target(dest_root, name):
++    """Resolve *name* to an absolute path rooted inside *dest_root*.
++
++    RPM file names are ordinarily absolute (``/opt/app/x``); unpacking into a
++    staging root means re-rooting them beneath *dest_root* rather than writing
++    to the real system path. Any name that, once normalised, would land outside
++    *dest_root* -- via a leading slash/drive or ``..`` components -- is
++    rejected: a package must not be able to write outside the directory it was
++    asked to unpack into.
++
++    Returns ``None`` for names that carry no file component (e.g. ``.``).
++    """
++    rel = name.replace("\\", "/")
++    # Force the name to be relative: drop any drive and leading slashes.
++    _drive, rel = os.path.splitdrive(rel)
++    rel = rel.lstrip("/")
++
++    root = os.path.abspath(dest_root)
++    target = os.path.normpath(os.path.join(root, rel))
++    if target == root:
++        return None
++    if os.path.commonpath([root, target]) != root:
++        raise ValueError(
++            "refusing to unpack %r outside the staging root" % (name,)
++        )
++    return target
++
+ 
+ def install_rpm(rpm_path, dest_dir):
+     """Unpack the RPM at *rpm_path* into *dest_dir*.
+@@ -15,4 +65,46 @@ def install_rpm(rpm_path, dest_dir):
+     :returns: a report of the installed files -- a list in which each installed
+         file carries its ``path``, ``digest``, and ``size``.
+     """
+-    raise NotImplementedError("install_rpm is not implemented yet")
++    dest_root = os.path.abspath(dest_dir)
++    os.makedirs(dest_root, exist_ok=True)
++
++    report = []
++    with rpmfile.open(rpm_path) as rpm:
++        digest_name = _digest_name(rpm.headers)
++        for member in rpm.getmembers():
++            # ``getmembers`` already omits directories; skip symlinks too, since
++            # materialising them safely under a staging root is out of scope.
++            if member.isdir or member.issymlink:
++                continue
++
++            target = _staged_target(dest_root, member.name)
++            if target is None:
++                continue
++
++            parent = os.path.dirname(target)
++            if parent:
++                os.makedirs(parent, exist_ok=True)
++
++            # Hash and size come from the bytes we actually wrote, so the report
++            # describes what landed on disk rather than what the header claims.
++            hasher = hashlib.new(digest_name)
++            size = 0
++            stream = rpm.extractfile(member)
++            with open(target, "wb") as out:
++                while True:
++                    chunk = stream.read(_CHUNK)
++                    if not chunk:
++                        break
++                    out.write(chunk)
++                    hasher.update(chunk)
++                    size += len(chunk)
++
++            report.append(
++                {
++                    "path": os.path.relpath(target, dest_root).replace(os.sep, "/"),
++                    "digest": hasher.hexdigest(),
++                    "size": size,
++                }
++            )
++
++    return report
