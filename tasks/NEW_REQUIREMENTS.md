@@ -18,7 +18,7 @@ Copilot is removed. Haiku is removed from the panel.
 
 | ID | Required setup |
 | --- | --- |
-| **C1** | Claude Code + most-capable Claude (Opus 4.8 or Fable), HIGHEST reasoning level |
+| **C1** | Claude Code + **Opus 4.8** (`us.anthropic.claude-opus-4-8`), HIGHEST reasoning level (`--effort max`). PINNED by maintainer — NOT Opus 5 / not "most-capable / moving target". |
 | **C2** | Codex + most-capable OpenAI (GPT-5.6), HIGHEST reasoning level |
 
 Both run at maximum reasoning. The question is no longer "can a weak/noisy
