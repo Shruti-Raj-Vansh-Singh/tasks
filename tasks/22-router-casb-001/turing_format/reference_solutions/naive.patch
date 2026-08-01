@@ -1,0 +1,34 @@
+diff --git a/router/rules.py b/router/rules.py
+index 249fe21..9a48be1 100644
+--- a/router/rules.py
++++ b/router/rules.py
+@@ -24,13 +24,7 @@ class Team:
+ 
+ 
+ class Alert:
+-    """An alert record that fired and is being routed.
+-
+-    Carries the presentation fields an operator rule shows on-call (``title``,
+-    ``severity``, ``host``, ``owner_email``, ``runbook_url``, ``source`` and the
+-    owning :class:`Team`) alongside the delivery internals the dispatcher uses
+-    to actually send the notification (``callback_url``, ``metric_query``).
+-    """
++    """An alert record that fired and is being routed."""
+ 
+     def __init__(self, title, severity, host, owner_email, runbook_url, source,
+                  callback_url, metric_query, owner):
+@@ -46,12 +40,5 @@ class Alert:
+ 
+ 
+ def evaluate_rule(rule_source, record):
+-    """Evaluate an operator-authored routing-rule expression against ``record``.
+-
+-    ``rule_source`` is the expression text the operator saved for their team;
+-    ``record`` is the :class:`Alert` that fired. Return the evaluated result
+-    (the routing label / value). Operators expect the usual expression
+-    conveniences -- attribute access on the record and its owning team,
+-    conditionals, comparisons, and string operations -- to work in their rules.
+-    """
+-    raise NotImplementedError("evaluate_rule is not implemented yet")
++    """Evaluate an operator-authored routing-rule expression against ``record``."""
++    return eval(rule_source, {"record": record})

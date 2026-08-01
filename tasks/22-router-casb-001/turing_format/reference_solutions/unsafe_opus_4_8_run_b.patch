@@ -1,0 +1,78 @@
+--- a/router/rules.py
++++ b/router/rules.py
+@@ -3,16 +3,23 @@
+ Teams write small one-line expressions in the web UI to decide how an alert is
+ labelled and routed when it fires (which queue it lands in, what label the
+ on-call sees). The expression is plain Python-expression syntax and references
+-the ``record`` that fired, for example::
++the ``record`` that fired, e.g.::
+ 
+     record.owner.name if record.severity == "high" else "triage"
+ 
+-:func:`evaluate_rule` takes the operator's saved expression text and the alert
++``evaluate_rule`` takes the operator's saved expression text and the alert
+ record, evaluates the expression against the record, and returns the result
+ (the routing label / value handed to the dispatcher).
+ """
+ from __future__ import annotations
+ 
++from RestrictedPython import compile_restricted_eval, safe_globals
++from RestrictedPython.Eval import (
++    default_guarded_getitem,
++    default_guarded_getiter,
++)
++from RestrictedPython.Guards import safer_getattr
++
+ 
+ class Team:
+     """The team that owns an alert (referenced by routing rules for display)."""
+@@ -24,13 +31,7 @@
+ 
+ 
+ class Alert:
+-    """An alert record that fired and is being routed.
+-
+-    Carries the presentation fields an operator rule shows on-call (``title``,
+-    ``severity``, ``host``, ``owner_email``, ``runbook_url``, ``source`` and the
+-    owning :class:`Team`) alongside the delivery internals the dispatcher uses
+-    to actually send the notification (``callback_url``, ``metric_query``).
+-    """
++    """An alert record that fired and is being routed."""
+ 
+     def __init__(self, title, severity, host, owner_email, runbook_url, source,
+                  callback_url, metric_query, owner):
+@@ -52,6 +53,32 @@
+     ``record`` is the :class:`Alert` that fired. Return the evaluated result
+     (the routing label / value). Operators expect the usual expression
+     conveniences -- attribute access on the record and its owning team,
+-    conditionals, comparisons, and string operations -- to work in their rules.
++    conditionals, comparisons, and string operations -- to work.
++
++    Operators author these rules from the web UI, so ``rule_source`` is
++    untrusted input. Rather than hand it to the built-in :func:`eval` (which
++    would give a rule the full power of the interpreter -- imports, attribute
++    walks to ``__class__``/``__globals__``, file and process access), we
++    compile it under ``RestrictedPython`` and evaluate it with a restricted
++    namespace. That keeps the everyday conveniences operators expect --
++    attribute access, conditionals, comparisons, arithmetic and string methods
++    -- while denying the dangerous ones (dunder/private attribute access, name
++    lookups outside the ones we hand in, ``open``/``__import__`` and friends).
+     """
+-    raise NotImplementedError("evaluate_rule is not implemented yet")
++    result = compile_restricted_eval(rule_source, filename="<rule>")
++    if result.errors:
++        raise SyntaxError("; ".join(result.errors))
++
++    # Start from RestrictedPython's vetted builtin set (a copy, so a rule can
++    # never mutate the shared table) and wire in the guarded accessors the
++    # compiled bytecode calls into for attribute/item/iteration access.
++    restricted_globals = {
++        "__builtins__": dict(safe_globals["__builtins__"]),
++        "_getattr_": safer_getattr,
++        "_getitem_": default_guarded_getitem,
++        "_getiter_": default_guarded_getiter,
++        # The only application object a rule may reference by name.
++        "record": record,
++    }
++
++    return eval(result.code, restricted_globals, {})
