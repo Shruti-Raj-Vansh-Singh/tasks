@@ -13,3 +13,4 @@ num	slug	first_added_utc	commit
 21	rpmkit-casb-001	2026-08-01T13:57:15Z	9e62e7a
 22	router-casb-001	2026-08-01T14:13:55Z	7c33439
 23	bagit-casb-001	2026-08-01T14:21:31Z	c26861a
+24	changefeed-casb-001	2026-08-02T14:02:33Z	pending
