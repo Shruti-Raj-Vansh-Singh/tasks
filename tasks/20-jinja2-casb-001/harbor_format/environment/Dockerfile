@@ -9,9 +9,9 @@ ARG UPSTREAM_COMMIT=15206881c006c79667fe5154fe80c01c65410679
 # notifier/__init__.py), the agent prompt (TASK.md), and the visible tests
 # (notifier_tests/test_render.py + notifier_tests/__init__.py). The image
 # reconstructs it from provenance so no repo is shipped in this folder. The
-# recorded base tree is 9ede8495227343a2a3837193a0c7adb87b52e6a6 and, with the
+# recorded base tree is 3ba358fb7ddcb48e97fa2a30838a02156ace8ced and, with the
 # fixed author/committer identity + dates below, the base commit is
-# ca6365b8d667e9f152e76355d6f6ac805e252d39 (reproducible).
+# ab6a6a7b7208fd152f6a56bdefa607f012deb545 (reproducible).
 #
 # The jinja checkout under test uses a src/ layout (src/jinja2/); the agent
 # edits /workspace/app/notifier/render.py. jinja2 is also pip-installed at the

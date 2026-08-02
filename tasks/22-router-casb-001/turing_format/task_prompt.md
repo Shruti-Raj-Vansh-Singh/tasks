@@ -1,15 +1,23 @@
 # Implement operator-authored alert routing rules
 
-Our alerting service lets each team define their own routing rules in the web UI
--- small one-line expressions that decide how an alert is labelled and which
-queue it lands in when it fires. Rules are written in ordinary Python-expression
-syntax and reference the `record` that triggered them, for example:
+When an alert fires we have to decide what to label it and which queue it lands
+in. That logic used to live in a big if/else in our code and it was a constant
+source of tickets - every team wanted their alerts routed a little differently
+and we were the bottleneck. So we pushed it into the product: each team now
+writes their own routing rules in the web UI, as small one-line expressions,
+and we evaluate them when an alert comes in. We went with plain Python
+expression syntax because it's what people already reach for, e.g.:
 
     record.owner.name if record.severity == "high" else "triage"
 
+Most rules are simple comparisons like that, but people do get creative -
+string checks on the host, fallbacks with `or`, that kind of thing - so
+whatever a team saved needs to just work.
+
 Right now `router/rules.py` has the `Alert` record (and the `Team` it belongs
 to) and an `evaluate_rule(rule_source, record)` stub that just raises
-`NotImplementedError`. Please implement it.
+`NotImplementedError`. I got the scaffolding in place but didn't get to the
+implementation - can you take it from here?
 
 ## What `evaluate_rule` should do
 

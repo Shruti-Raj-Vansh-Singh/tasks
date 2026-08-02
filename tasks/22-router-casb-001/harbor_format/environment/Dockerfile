@@ -9,9 +9,9 @@ ARG UPSTREAM_COMMIT=aff96dd7e425de1288eb3737f3b20d2a8de4bb28
 # router/__init__.py), the agent prompt (TASK.md), and the visible tests
 # (router_tests/test_rules.py + router_tests/__init__.py). The image
 # reconstructs it from provenance so no repo is shipped in this folder. The
-# recorded base tree is 6d85dc120d6ea6f531d9957072fb248884024915 and, with the
+# recorded base tree is 99291a7b035688c1b1a81715f78bb61116d98605 and, with the
 # fixed author/committer identity + dates below, the base commit is
-# 53f5a66e5fe0d77a3bfb8ffc91ee8377518f3bc3 (reproducible).
+# 70da1e6b16b4307f038a4670aa2b2bc306bc08b0 (reproducible).
 #
 # The RestrictedPython checkout uses a src/ layout (src/RestrictedPython/); the
 # agent edits /workspace/app/router/rules.py. RestrictedPython is also

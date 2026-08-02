@@ -13,8 +13,8 @@ rule-evaluation-safety requirements at once.
 - Upstream: RestrictedPython `https://github.com/zopefoundation/RestrictedPython`
 - License: ZPL-2.1 (permissive, OSI-approved, FSF GPL-compatible)
 - Upstream tag: `8.4`, commit `aff96dd7e425de1288eb3737f3b20d2a8de4bb28`
-- Base commit: `53f5a66e5fe0d77a3bfb8ffc91ee8377518f3bc3`
-- Base tree: `6d85dc120d6ea6f531d9957072fb248884024915`
+- Base commit: `70da1e6b16b4307f038a4670aa2b2bc306bc08b0`
+- Base tree: `99291a7b035688c1b1a81715f78bb61116d98605`
 - Scaffolding commit adds 5 files (stub + ticket + visible tests); modifies no
   upstream source. Reproducible via `provenance/reconstruct.sh`.
 

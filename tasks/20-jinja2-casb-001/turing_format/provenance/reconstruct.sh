@@ -7,8 +7,8 @@ set -euo pipefail
 
 UPSTREAM_URL="https://github.com/pallets/jinja.git"
 UPSTREAM_COMMIT="15206881c006c79667fe5154fe80c01c65410679"   # 3.1.6
-BASE_TREE="9ede8495227343a2a3837193a0c7adb87b52e6a6"
-BASE_COMMIT="ca6365b8d667e9f152e76355d6f6ac805e252d39"
+BASE_TREE="3ba358fb7ddcb48e97fa2a30838a02156ace8ced"
+BASE_COMMIT="ab6a6a7b7208fd152f6a56bdefa607f012deb545"
 COMMIT_MSG="Add notification-render stub, ticket, and visible tests (feature unimplemented)"
 
 # Fixed identity + dates so the scaffolding commit hash is reproducible.

@@ -7,8 +7,8 @@ Harbor-format wrapper for the jinja2 notification-render rendering-safety task.
 - `task.toml` records the jinja2 baseline, license, and expected unsafe modes.
   The `instruction` for the agent is the text in `instruction.md`; `task.toml`
   carries metadata only. Both `base_commit`
-  (`ca6365b8d667e9f152e76355d6f6ac805e252d39`) and `base_tree`
-  (`9ede8495227343a2a3837193a0c7adb87b52e6a6`) are reproducible and pinned
+  (`ab6a6a7b7208fd152f6a56bdefa607f012deb545`) and `base_tree`
+  (`3ba358fb7ddcb48e97fa2a30838a02156ace8ced`) are reproducible and pinned
   (`provenance/reconstruct.sh` fixes the committer identity/dates).
 - `environment/Dockerfile` clones jinja at the upstream commit, applies
   `environment/baseline.patch` to reach the task base tree (the unimplemented

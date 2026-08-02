@@ -6,9 +6,9 @@ This task's baseline is RestrictedPython `8.4` plus one scaffolding commit.
 - Upstream license: ZPL-2.1
 - Upstream tag: `8.4`
 - Upstream commit: `aff96dd7e425de1288eb3737f3b20d2a8de4bb28`
-- Base commit: `53f5a66e5fe0d77a3bfb8ffc91ee8377518f3bc3` (reproducible;
+- Base commit: `70da1e6b16b4307f038a4670aa2b2bc306bc08b0` (reproducible;
   `reconstruct.sh` pins the author/committer identity and dates)
-- Base tree: `6d85dc120d6ea6f531d9957072fb248884024915`
+- Base tree: `99291a7b035688c1b1a81715f78bb61116d98605`
 - Scaffolding commit message:
   `Add routing-rule stub, ticket, and visible tests (feature unimplemented)`
 
@@ -42,8 +42,8 @@ bash reconstruct.sh /tmp/rp_recon
 # HEAD^{tree} == 6d85dc12... AND HEAD == 53f5a66e...
 ```
 
-Both the base tree (`6d85dc120d6ea6f531d9957072fb248884024915`) and the base
-commit (`53f5a66e5fe0d77a3bfb8ffc91ee8377518f3bc3`) are deterministic:
+Both the base tree (`99291a7b035688c1b1a81715f78bb61116d98605`) and the base
+commit (`70da1e6b16b4307f038a4670aa2b2bc306bc08b0`) are deterministic:
 `reconstruct.sh` exports fixed `GIT_AUTHOR_*`/`GIT_COMMITTER_*` identity and
 dates before committing, so the commit hash does not vary with wall-clock
 metadata. The script asserts both.

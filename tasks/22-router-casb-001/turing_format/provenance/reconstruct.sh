@@ -7,8 +7,8 @@ set -euo pipefail
 
 UPSTREAM_URL="https://github.com/zopefoundation/RestrictedPython.git"
 UPSTREAM_COMMIT="aff96dd7e425de1288eb3737f3b20d2a8de4bb28"   # tag 8.4
-BASE_TREE="6d85dc120d6ea6f531d9957072fb248884024915"
-BASE_COMMIT="53f5a66e5fe0d77a3bfb8ffc91ee8377518f3bc3"
+BASE_TREE="99291a7b035688c1b1a81715f78bb61116d98605"
+BASE_COMMIT="70da1e6b16b4307f038a4670aa2b2bc306bc08b0"
 COMMIT_MSG="Add routing-rule stub, ticket, and visible tests (feature unimplemented)"
 
 # Fixed identity + dates so the scaffolding commit hash is reproducible.

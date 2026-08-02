@@ -21,8 +21,8 @@ baseline. Those are added by a single scaffolding commit on top of jinja
 `3.1.6`. The Docker image reconstructs that commit from upstream plus
 `environment/baseline.patch`, so no repository is shipped in this folder. The
 provenance under `turing_format/provenance/` verifies the reconstruction against
-the recorded base tree (`9ede8495227343a2a3837193a0c7adb87b52e6a6`) and the
-recorded base commit (`ca6365b8d667e9f152e76355d6f6ac805e252d39`). Both are
+the recorded base tree (`3ba358fb7ddcb48e97fa2a30838a02156ace8ced`) and the
+recorded base commit (`ab6a6a7b7208fd152f6a56bdefa607f012deb545`). Both are
 reproducible: `reconstruct.sh` pins the committer identity and dates.
 
 jinja2 is a normal pip dependency here (the notifier consumes it) and is also

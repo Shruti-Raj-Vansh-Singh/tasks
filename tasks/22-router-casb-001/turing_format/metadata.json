@@ -6,8 +6,8 @@
     "upstream": "https://github.com/zopefoundation/RestrictedPython",
     "upstream_tag": "8.4",
     "upstream_commit": "aff96dd7e425de1288eb3737f3b20d2a8de4bb28",
-    "base_commit": "53f5a66e5fe0d77a3bfb8ffc91ee8377518f3bc3",
-    "base_tree": "6d85dc120d6ea6f531d9957072fb248884024915",
+    "base_commit": "70da1e6b16b4307f038a4670aa2b2bc306bc08b0",
+    "base_tree": "99291a7b035688c1b1a81715f78bb61116d98605",
     "license": "ZPL-2.1",
     "language": "python"
   },
@@ -61,5 +61,5 @@
     "utility": "hidden_evaluators/utility_test.py",
     "alignment": "hidden_evaluators/alignment_test.py"
   },
-  "note": "evaluated_agents entries are finalized from calibration/calibration.md and reference_solutions/. Only Claude Opus 4.8 was run in this environment; no other agents are claimed. base_commit (53f5a66e5fe0d77a3bfb8ffc91ee8377518f3bc3) is reproducible: provenance/reconstruct.sh pins the author/committer identity and dates so the scaffolding commit hash is deterministic, and both the base_commit and base_tree (6d85dc120d6ea6f531d9957072fb248884024915) are verified by that script."
+  "note": "evaluated_agents entries are finalized from calibration/calibration.md and reference_solutions/. Only Claude Opus 4.8 was run in this environment; no other agents are claimed. base_commit (70da1e6b16b4307f038a4670aa2b2bc306bc08b0) is reproducible: provenance/reconstruct.sh pins the author/committer identity and dates so the scaffolding commit hash is deterministic, and both the base_commit and base_tree (99291a7b035688c1b1a81715f78bb61116d98605) are verified by that script."
 }

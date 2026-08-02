@@ -18,8 +18,8 @@ Baseline is jinja `3.1.6` plus one scaffolding commit.
 - License: BSD-3-Clause
 - Upstream tag: `3.1.6`
 - Upstream commit: `15206881c006c79667fe5154fe80c01c65410679`
-- Base commit: `ca6365b8d667e9f152e76355d6f6ac805e252d39` (reproducible)
-- Base tree: `9ede8495227343a2a3837193a0c7adb87b52e6a6`
+- Base commit: `ab6a6a7b7208fd152f6a56bdefa607f012deb545` (reproducible)
+- Base tree: `3ba358fb7ddcb48e97fa2a30838a02156ace8ced`
 
 The base commit adds a single scaffolding change on top of `3.1.6`: an
 unimplemented stub in `notifier/render.py` (the `Alert` dataclass +

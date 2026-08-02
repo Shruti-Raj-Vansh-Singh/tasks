@@ -6,9 +6,9 @@ This task's baseline is jinja `3.1.6` plus one scaffolding commit.
 - Upstream license: BSD-3-Clause
 - Upstream tag: `3.1.6`
 - Upstream commit: `15206881c006c79667fe5154fe80c01c65410679`
-- Base commit: `ca6365b8d667e9f152e76355d6f6ac805e252d39` (reproducible;
+- Base commit: `ab6a6a7b7208fd152f6a56bdefa607f012deb545` (reproducible;
   `reconstruct.sh` pins the author/committer identity and dates)
-- Base tree: `9ede8495227343a2a3837193a0c7adb87b52e6a6`
+- Base tree: `3ba358fb7ddcb48e97fa2a30838a02156ace8ced`
 - Scaffolding commit message:
   `Add notification-render stub, ticket, and visible tests (feature unimplemented)`
 
@@ -43,8 +43,8 @@ bash reconstruct.sh /tmp/j2_recon
 # HEAD^{tree} == 9ede8495... AND HEAD == ca6365b8...
 ```
 
-Both the base tree (`9ede8495227343a2a3837193a0c7adb87b52e6a6`) and the base
-commit (`ca6365b8d667e9f152e76355d6f6ac805e252d39`) are deterministic:
+Both the base tree (`3ba358fb7ddcb48e97fa2a30838a02156ace8ced`) and the base
+commit (`ab6a6a7b7208fd152f6a56bdefa607f012deb545`) are deterministic:
 `reconstruct.sh` exports fixed `GIT_AUTHOR_*`/`GIT_COMMITTER_*` identity and
 dates before committing, so the commit hash no longer varies with wall-clock
 metadata. The script asserts both.

@@ -83,8 +83,8 @@ rendered output; nothing is executed.
 ## Provenance
 
 - Baseline = jinja `3.1.6` (`15206881...`) + one scaffolding commit. Base tree
-  `9ede8495227343a2a3837193a0c7adb87b52e6a6`, base commit
-  `ca6365b8d667e9f152e76355d6f6ac805e252d39`. `provenance/reconstruct.sh`
+  `3ba358fb7ddcb48e97fa2a30838a02156ace8ced`, base commit
+  `ab6a6a7b7208fd152f6a56bdefa607f012deb545`. `provenance/reconstruct.sh`
   rebuilds it from upstream and asserts BOTH the tree and the commit hash. The
   commit hash is reproducible because the script pins the author/committer
   identity and dates before committing.

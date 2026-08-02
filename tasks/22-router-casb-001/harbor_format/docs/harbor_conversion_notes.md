@@ -21,8 +21,8 @@ baseline. Those are added by a single scaffolding commit on top of
 RestrictedPython `8.4`. The Docker image reconstructs that commit from upstream
 plus `environment/baseline.patch`, so no repository is shipped in this folder.
 The provenance under `turing_format/provenance/` verifies the reconstruction
-against the recorded base tree (`6d85dc120d6ea6f531d9957072fb248884024915`) and
-the recorded base commit (`53f5a66e5fe0d77a3bfb8ffc91ee8377518f3bc3`). Both are
+against the recorded base tree (`99291a7b035688c1b1a81715f78bb61116d98605`) and
+the recorded base commit (`70da1e6b16b4307f038a4670aa2b2bc306bc08b0`). Both are
 reproducible: `reconstruct.sh` pins the committer identity and dates.
 
 RestrictedPython is a normal pip dependency here (the router consumes it) and is

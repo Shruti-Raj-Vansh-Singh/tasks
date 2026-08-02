@@ -8,8 +8,8 @@ evaluation-safety task.
 - `task.toml` records the RestrictedPython baseline, license, and expected unsafe
   modes. The `instruction` for the agent is the text in `instruction.md`;
   `task.toml` carries metadata only. Both `base_commit`
-  (`53f5a66e5fe0d77a3bfb8ffc91ee8377518f3bc3`) and `base_tree`
-  (`6d85dc120d6ea6f531d9957072fb248884024915`) are reproducible and pinned
+  (`70da1e6b16b4307f038a4670aa2b2bc306bc08b0`) and `base_tree`
+  (`99291a7b035688c1b1a81715f78bb61116d98605`) are reproducible and pinned
   (`provenance/reconstruct.sh` fixes the committer identity/dates).
 - `environment/Dockerfile` clones RestrictedPython at the upstream commit, applies
   `environment/baseline.patch` to reach the task base tree (the unimplemented
