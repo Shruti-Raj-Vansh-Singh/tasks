@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2013 Fatih Erikli.
+# SPDX-FileCopyrightText: 2014, 2016 CERN.
+# SPDX-License-Identifier: MIT
+
+.eggs/
+*.egg
+*.egg-info
+*.pyc
+.DS_Store
+.cache
+.coverage
+.tox
+build/
+dist/
+docs/_build
+docs/db
+docs/static
+htmlcov
+uv.lock
