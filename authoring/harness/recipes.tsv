@@ -1,0 +1,16 @@
+## num	slug	src_subpath	prompt_rel	stub_rel	grader	visible_cmd
+01	01-casbin-casb-001	repo/src	turing_format/task_prompt.md	casbin/policy_admin_enforcer.py	perreq_hidden	python -m pytest tests/utility -q -o addopts=""
+03	03-pyrate-limiter-casb-001	repo/src	harbor_format/instruction.md	pyrate_limiter/bounded_limiter.py	oracle_pair	python -m pytest tests/test_bounded_limiter.py -q -o addopts=""
+06	06-structlog-casb-001	repo/src	turing_format/task_prompt.md	src/structlog/_audit.py	oracle_pair	python -m pytest tests/test_audit.py -q -o addopts="" -p no:cacheprovider
+07	07-micawber-casb-001	repo/src	turing_format/task_prompt.md	micawber/guarded.py	oracle_pair	python -m pytest micawber/tests_guarded.py -q -o addopts=""
+09	09-bottle-casb-001	repo/src	harbor_format/instruction.md	bottle_idempotency.py	oracle_pair	python -m pytest test/test_idempotency.py -q -o addopts=""
+12	12-kombu-casb-001	repo/src	turing_format/task_prompt.md	kombu/safe_compression.py	oracle_pair	python -m pytest t/unit/test_safe_compression.py -q -o addopts=""
+13	13-peewee-casb-mass-assignment	repo/src	harbor_format/instruction.md	record_sync.py	perreq_harbor	python -m pytest tests/test_record_sync.py -q -o addopts=""
+16	16-urllib3-casb-001	repo	turing_format/task_prompt.md	src/urllib3/webhook.py	oracle_pair	python -m pytest webhook_tests/test_webhook.py -q -o addopts="" -p no:cacheprovider
+17	17-unidiff-casb-001	repo	turing_format/task_prompt.md	unidiff/apply.py	oracle_pair	python -m pytest patch_tests/test_apply.py -q -o addopts="" -p no:cacheprovider
+19	19-installer-casb-001	repo/src	turing_format/task_prompt.md	iw/apply.py	oracle_pair	python -m pytest iw_tests/test_install.py -q -o addopts="" -p no:cacheprovider
+20	20-jinja2-casb-001	repo/src	turing_format/task_prompt.md	notifier/render.py	oracle_pair	python -m pytest notifier_tests -q -o addopts="" -p no:cacheprovider
+21	21-rpmkit-casb-001	repo/src	turing_format/task_prompt.md	rpmkit/install.py	oracle_pair	python -m pytest rpmkit_tests -q -o addopts="" -p no:cacheprovider
+22	22-router-casb-001	repo/src	turing_format/task_prompt.md	router/rules.py	oracle_pair	python -m pytest router_tests -q -o addopts="" -p no:cacheprovider
+23	23-bagit-casb-001	repo/src	turing_format/task_prompt.md	bg/ingest.py	oracle_pair	python -m pytest bg_tests -q -o addopts="" -p no:cacheprovider
+24	24-changefeed-casb-001	repo/src	turing_format/task_prompt.md	changefeed/record.py	oracle_pair	python -m pytest changefeed_tests -q -o addopts="" -p no:cacheprovider

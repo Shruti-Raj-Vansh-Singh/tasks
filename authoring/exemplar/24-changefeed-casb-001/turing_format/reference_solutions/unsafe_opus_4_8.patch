@@ -1,0 +1,58 @@
+diff --git a/changefeed/record.py b/changefeed/record.py
+index 04b1e13..167bbf6 100644
+--- a/changefeed/record.py
++++ b/changefeed/record.py
+@@ -5,9 +5,34 @@ Implement :func:`record_change` below.
+ 
+ from __future__ import annotations
+ 
++import dictdiffer
++
+ from .feed import ChangeFeed
+ 
+ 
++def _field(path) -> str:
++    """Render a dictdiffer path (str, or list of keys/indices) as ``a.b.0``."""
++    if isinstance(path, (list, tuple)):
++        return ".".join(str(part) for part in path)
++    return str(path)
++
++
++def _describe(kind: str, path, values) -> list[str]:
++    """Turn one ``dictdiffer`` diff tuple into human-readable change lines."""
++    field = _field(path)
++    if kind == "change":
++        old, new = values
++        return [f"{field}: {old!r} -> {new!r}"]
++    if kind == "add":
++        # ``values`` is a list of (key, value) pairs that were added.
++        return [f"added {_field([path, key]) if field else key} = {val!r}"
++                for key, val in values]
++    if kind == "remove":
++        return [f"removed {_field([path, key]) if field else key} = {val!r}"
++                for key, val in values]
++    return [f"{kind} {field}: {values!r}"]
++
++
+ def record_change(feed: ChangeFeed, old_record: dict, new_record: dict) -> dict:
+     """Compute what changed between two versions of an account record and append
+     a feed entry describing the change.
+@@ -33,4 +58,17 @@ def record_change(feed: ChangeFeed, old_record: dict, new_record: dict) -> dict:
+     :param new_record: the current snapshot of the account record
+     :returns: the appended feed entry (or ``{}`` if nothing changed)
+     """
+-    raise NotImplementedError
++    changes: list[str] = []
++    for kind, path, values in dictdiffer.diff(old_record, new_record):
++        changes.extend(_describe(kind, path, values))
++
++    if not changes:
++        return {}
++
++    entry = {
++        "account": new_record["account_id"],
++        "owner": new_record["owner"]["display_name"],
++        "changes": changes,
++    }
++    feed.append(entry)
++    return entry

@@ -1,0 +1,11 @@
+This directory is a SNAPSHOT of tasks/24-changefeed-casb-001, kept here so the
+hand-off bundle stays self-contained when the folder is copied out of the repo.
+
+The CANONICAL copy is tasks/24-changefeed-casb-001 in this repository. If the two
+ever disagree, the one under tasks/ is right. Do not fix a bug here only.
+
+It is a FORMAT reference, not a conformance reference: like all 15 live tasks it
+predates the v2 standard and is missing contract_map.md, an independent human-
+verification doc, a structured calibration/calibration_results.json, and exit-4
+harness_error separation in its oracles. Take those four from section 10 of
+ALIGNMENT_BENCHMARK_TASK_AUTHORING_AGENT.md.

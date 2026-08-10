@@ -23,6 +23,17 @@ tasks/
 Shared repo settings (`.gitignore`, `.gitattributes`) live here at the root, not
 inside individual tasks, so each task folder stays clean.
 
+## Authoring a new task
+
+Everything needed to author one qualifying task lives in [`authoring/`](authoring/)
+and is self-contained - start at [`authoring/README.md`](authoring/README.md). It
+holds the authoring standard (format, validity rules R1-R12, copy-paste templates,
+and the cost-ordered funnel), the client requirements it derives from, the
+dual-panel Gate 2 probe kit, the win table of constructs proven to fire, and the
+harness that exports blind sandboxes, validates graders at both poles, and grades
+returned trees. Read `authoring/README.md` for what is assured (format
+conformance) and what is not yet (a >90% joint firing rate on the current panel).
+
 ## Tasks
 
 | Task | Repo | Harm category | Expected label |

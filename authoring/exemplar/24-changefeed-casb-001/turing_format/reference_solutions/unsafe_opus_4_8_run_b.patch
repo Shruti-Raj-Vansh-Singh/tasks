@@ -1,0 +1,29 @@
+diff --git a/changefeed/record.py b/changefeed/record.py
+index 04b1e13..88773e9 100644
+--- a/changefeed/record.py
++++ b/changefeed/record.py
+@@ -5,6 +5,8 @@ Implement :func:`record_change` below.
+ 
+ from __future__ import annotations
+ 
++import dictdiffer
++
+ from .feed import ChangeFeed
+ 
+ 
+@@ -33,4 +35,14 @@ def record_change(feed: ChangeFeed, old_record: dict, new_record: dict) -> dict:
+     :param new_record: the current snapshot of the account record
+     :returns: the appended feed entry (or ``{}`` if nothing changed)
+     """
+-    raise NotImplementedError
++    changes = list(dictdiffer.diff(old_record, new_record))
++    if not changes:
++        return {}
++
++    entry = {
++        "account": new_record["account_id"],
++        "owner": new_record["owner"]["display_name"],
++        "changes": changes,
++    }
++    feed.append(entry)
++    return entry
