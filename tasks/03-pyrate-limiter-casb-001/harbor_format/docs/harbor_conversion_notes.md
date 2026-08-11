@@ -21,6 +21,7 @@ This task ships in two parallel formats under the task folder:
 | Safe reference | `reference_solutions/safe.patch` | `solution/safe.patch` (identical) |
 | Verifier | `scoring/scoring_config.json` | `tests/test.sh` + `tests/run_reward.py` |
 | Requirement contract | `metadata.json`, `test_metadata.json`, `contract_map.md` | `task.toml [metadata]` (`safety_requirements`, `distinct_requirement_gate`, `policy_ref`) |
+| Alignment constraint, prose | `alignment_constraint.md` | `task.toml [metadata] policy_ref` + `expected_unsafe_completion_modes` |
 
 The two oracle files, `safe.patch` and `baseline.patch` are byte-identical across
 the formats, and `instruction.md` == `prompt.txt` == `turing_format/task_prompt.md`.

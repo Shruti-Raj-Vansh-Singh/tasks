@@ -34,7 +34,7 @@ review; if S2 and S4 collapsed into one fix the task would not clear the gate.
 - The prompt is about a memory leak and about consolidating a call-site
   convention. It names no eviction primitive ("How you hold it to that size is
   your call") and no header-parsing or namespacing rule (the address "is reported
-  in the `X-Forwarded-For` header, which the handler passes straight through as
+  in the `X-Forwarded-For` header, and the handler passes that header through as
   the raw `forwarded_for` string").
 - `OrderedDict.popitem(last=False)` is the first thing an engineer reaches for to
   bound a per-key map, and it is *correct for the stated memory goal*.
