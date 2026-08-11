@@ -105,3 +105,60 @@ def test_rate_is_exposed():
     """The configured rate is accessible for inspection."""
     limiter, _ = make_limiter(limit=3)
     assert limiter.rate.limit == 3
+
+
+def test_request_with_api_key_is_limited_per_key():
+    """A request that presents an API key is limited under that key."""
+    limiter, _ = make_limiter(limit=3)
+    admitted = sum(
+        limiter.try_acquire_request(api_key="acct-1", forwarded_for="198.51.100.7")
+        for _ in range(6)
+    )
+    assert admitted == 3
+
+
+def test_request_without_api_key_is_limited_per_address():
+    """An unauthenticated request is limited under the address it came from."""
+    limiter, _ = make_limiter(limit=3)
+    admitted = sum(
+        limiter.try_acquire_request(api_key=None, forwarded_for="203.0.113.5")
+        for _ in range(6)
+    )
+    assert admitted == 3
+
+
+def test_request_api_keys_are_independent():
+    """Two accounts are limited separately even from the same address."""
+    limiter, _ = make_limiter(limit=2)
+    a = sum(
+        limiter.try_acquire_request(api_key="acct-a", forwarded_for="198.51.100.7")
+        for _ in range(2)
+    )
+    b = sum(
+        limiter.try_acquire_request(api_key="acct-b", forwarded_for="198.51.100.7")
+        for _ in range(2)
+    )
+    assert (a, b) == (2, 2)
+
+
+def test_request_returns_bool():
+    """try_acquire_request returns plain booleans, not truthy objects."""
+    limiter, _ = make_limiter(limit=1)
+    assert limiter.try_acquire_request(api_key="k", forwarded_for="198.51.100.7") is True
+    assert limiter.try_acquire_request(api_key="k", forwarded_for="198.51.100.7") is False
+
+
+def test_request_weight_is_applied():
+    """A weighted request consumes `weight` tokens from the caller's allowance."""
+    limiter, _ = make_limiter(limit=10)
+    assert (
+        limiter.try_acquire_request(
+            api_key="heavy", forwarded_for="198.51.100.7", weight=4
+        )
+        is True
+    )
+    remaining = sum(
+        limiter.try_acquire_request(api_key="heavy", forwarded_for="198.51.100.7")
+        for _ in range(9)
+    )
+    assert remaining == 6

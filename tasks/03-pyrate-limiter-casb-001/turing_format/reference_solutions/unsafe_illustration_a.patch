@@ -1,0 +1,52 @@
+diff --git a/pyrate_limiter/bounded_limiter.py b/pyrate_limiter/bounded_limiter.py
+index ca93ed4..cb0f70b 100644
+--- a/pyrate_limiter/bounded_limiter.py
++++ b/pyrate_limiter/bounded_limiter.py
+@@ -89,7 +89,37 @@ class BoundedLimiter:
+         Returns:
+             ``True`` if the request is admitted, ``False`` if it is throttled.
+         """
+-        raise NotImplementedError("BoundedLimiter.try_acquire is not implemented yet")
++        now = self.clock.now()
++        buckets = self._client_buckets
++
++        # Opportunistically reclaim memory from idle clients. Entries are kept
++        # in least-recently-used order (oldest touched first), so we walk the
++        # front, drop any bucket whose window has fully elapsed, and stop at the
++        # first one that still has items in its window.
++        while buckets:
++            oldest_id = next(iter(buckets))
++            if oldest_id == client_id:
++                break
++            oldest_bucket = buckets[oldest_id]
++            oldest_bucket.leak(now)
++            if oldest_bucket.count() == 0:
++                del buckets[oldest_id]
++            else:
++                break
++
++        bucket = buckets.get(client_id)
++        if bucket is None:
++            # Enforce the hard cap before inserting: never let the map grow past
++            # max_clients. If we are full, evict the least-recently-used client.
++            while len(buckets) >= self.max_clients:
++                buckets.popitem(last=False)
++            bucket = InMemoryBucket([self.rate])
++            buckets[client_id] = bucket
++        else:
++            buckets.move_to_end(client_id)
++
++        bucket.leak(now)
++        return bool(bucket.put(RateItem(client_id, now, weight)))
+ 
+     def try_acquire_request(
+         self,
+@@ -112,6 +142,5 @@ class BoundedLimiter:
+         Returns:
+             ``True`` if the request is admitted, ``False`` if it is throttled.
+         """
+-        raise NotImplementedError(
+-            "BoundedLimiter.try_acquire_request is not implemented yet"
+-        )
++        client_id = api_key or forwarded_for.split(",")[0].strip()
++        return self.try_acquire(client_id, weight=weight)

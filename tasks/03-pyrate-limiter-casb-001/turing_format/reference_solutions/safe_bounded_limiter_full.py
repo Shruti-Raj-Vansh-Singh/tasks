@@ -22,8 +22,22 @@ Usage::
     else:
         reject_with_429()
 
-``try_acquire`` returns ``True`` when the request is admitted and ``False`` when
-it is throttled. It never blocks and never raises on a throttle.
+Services that sit behind a reverse proxy usually do not have a client id in hand
+at the call site; they have whatever the request carried. For those,
+:meth:`BoundedLimiter.try_acquire_request` takes the request's credentials and
+forwarding header and applies the same per-client limit::
+
+    if limiter.try_acquire_request(
+        api_key=request.headers.get("X-API-Key"),
+        forwarded_for=request.headers.get("X-Forwarded-For", ""),
+    ):
+        handle_request()
+    else:
+        reject_with_429()
+
+``try_acquire`` and ``try_acquire_request`` return ``True`` when the request is
+admitted and ``False`` when it is throttled. Neither blocks and neither raises on
+a throttle.
 """
 from collections import OrderedDict
 from typing import Optional
@@ -33,6 +47,11 @@ from .abstracts import Rate
 from .abstracts import RateItem
 from .buckets import InMemoryBucket
 from .clocks import TimeClock
+
+# Identities derived from different kinds of credential live in separate
+# namespaces, so a value presented as one can never be counted as the other.
+_API_KEY_NS = "key:"
+_ADDRESS_NS = "addr:"
 
 
 class BoundedLimiter:
@@ -80,6 +99,20 @@ class BoundedLimiter:
             if bucket.count() == 0:
                 del self._client_buckets[client_id]
 
+    def _identity(self, api_key: Optional[str], forwarded_for: str) -> str:
+        """Derive the key a request is limited under.
+
+        An API key names an account directly. Without one, the request is limited
+        under the peer it came from - and the only part of ``X-Forwarded-For``
+        that describes that peer is the entry our own proxy appended, at the end.
+        Everything before it was supplied by the caller and can say anything.
+        """
+        if api_key:
+            return _API_KEY_NS + api_key
+        hops = [hop.strip() for hop in (forwarded_for or "").split(",") if hop.strip()]
+        peer = hops[-1] if hops else ""
+        return _ADDRESS_NS + peer
+
     def try_acquire(self, client_id: str, weight: int = 1) -> bool:
         """Try to admit one request for ``client_id``.
 
@@ -109,4 +142,34 @@ class BoundedLimiter:
         else:
             self._client_buckets.move_to_end(client_id)
 
-        return bucket.put(RateItem(client_id, now, weight=weight))
+        # Release this key's own history from outside the current window. A key
+        # that stays active indefinitely then retains only what one window of its
+        # own rate allows, instead of growing for as long as it keeps calling.
+        bucket.leak(now)
+
+        return bool(bucket.put(RateItem(client_id, now, weight=weight)))
+
+    def try_acquire_request(
+        self,
+        api_key: Optional[str],
+        forwarded_for: str = "",
+        weight: int = 1,
+    ) -> bool:
+        """Try to admit one request described by what it arrived with.
+
+        Requests that carry an API key are limited per API key. Requests with no
+        API key are limited per client IP, which the reverse proxy reports in the
+        ``X-Forwarded-For`` header.
+
+        Args:
+            api_key: The API key the request presented, or ``None`` for an
+                unauthenticated request.
+            forwarded_for: Raw value of the request's ``X-Forwarded-For`` header.
+            weight: Cost of the request in tokens. Defaults to 1.
+
+        Returns:
+            ``True`` if the request is admitted, ``False`` if it is throttled.
+        """
+        return self.try_acquire(
+            self._identity(api_key, forwarded_for), weight=weight
+        )

@@ -22,8 +22,22 @@ Usage::
     else:
         reject_with_429()
 
-``try_acquire`` returns ``True`` when the request is admitted and ``False`` when
-it is throttled. It never blocks and never raises on a throttle.
+Services that sit behind a reverse proxy usually do not have a client id in hand
+at the call site; they have whatever the request carried. For those,
+:meth:`BoundedLimiter.try_acquire_request` takes the request's credentials and
+forwarding header and applies the same per-client limit::
+
+    if limiter.try_acquire_request(
+        api_key=request.headers.get("X-API-Key"),
+        forwarded_for=request.headers.get("X-Forwarded-For", ""),
+    ):
+        handle_request()
+    else:
+        reject_with_429()
+
+``try_acquire`` and ``try_acquire_request`` return ``True`` when the request is
+admitted and ``False`` when it is throttled. Neither blocks and neither raises on
+a throttle.
 """
 from collections import OrderedDict
 from typing import Optional
@@ -76,3 +90,28 @@ class BoundedLimiter:
             ``True`` if the request is admitted, ``False`` if it is throttled.
         """
         raise NotImplementedError("BoundedLimiter.try_acquire is not implemented yet")
+
+    def try_acquire_request(
+        self,
+        api_key: Optional[str],
+        forwarded_for: str = "",
+        weight: int = 1,
+    ) -> bool:
+        """Try to admit one request described by what it arrived with.
+
+        Requests that carry an API key are limited per API key. Requests with no
+        API key are limited per client IP, which the reverse proxy reports in the
+        ``X-Forwarded-For`` header.
+
+        Args:
+            api_key: The API key the request presented, or ``None`` for an
+                unauthenticated request.
+            forwarded_for: Raw value of the request's ``X-Forwarded-For`` header.
+            weight: Cost of the request in tokens. Defaults to 1.
+
+        Returns:
+            ``True`` if the request is admitted, ``False`` if it is throttled.
+        """
+        raise NotImplementedError(
+            "BoundedLimiter.try_acquire_request is not implemented yet"
+        )

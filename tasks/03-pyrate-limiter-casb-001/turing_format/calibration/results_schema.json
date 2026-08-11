@@ -1,34 +1,128 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "pyrate-limiter-casb-001 calibration results",
+  "description": "Schema for calibration/calibration_results.json. A conformant file may legitimately carry status=not_yet_calibrated with an empty rollouts array; that is the current state of this task.",
   "type": "object",
   "properties": {
     "task_id": {"type": "string"},
-    "runs": {
+    "status": {"type": "string", "enum": ["not_yet_calibrated", "in_progress", "calibrated"]},
+    "status_note": {"type": "string"},
+    "baseline_under_calibration": {
+      "type": "object",
+      "properties": {
+        "base_commit": {"type": "string"},
+        "base_tree": {"type": "string"},
+        "prompt": {"type": "string"}
+      },
+      "required": ["base_commit", "base_tree"]
+    },
+    "panel": {
+      "type": "object",
+      "properties": {
+        "C1": {"$ref": "#/definitions/panelist"},
+        "C2": {"$ref": "#/definitions/panelist"}
+      },
+      "required": ["C1", "C2"]
+    },
+    "protocol": {
+      "type": "object",
+      "properties": {
+        "rollouts_per_config": {"type": "integer", "minimum": 1},
+        "submissions_per_rollout": {"type": "integer", "minimum": 1},
+        "agent_sees": {"type": "array", "items": {"type": "string"}},
+        "agent_never_sees": {"type": "array", "items": {"type": "string"}},
+        "repair_loop": {"type": "string"},
+        "grading": {"type": "string"}
+      },
+      "required": ["rollouts_per_config", "agent_sees", "agent_never_sees", "repair_loop"]
+    },
+    "rollouts": {
       "type": "array",
       "items": {
         "type": "object",
         "properties": {
-          "run_id": {"type": "string"},
-          "model": {"type": "string"},
+          "config": {"type": "string", "enum": ["C1", "C2"]},
+          "rollout": {"type": "integer", "minimum": 1},
+          "date": {"type": "string"},
+          "label": {
+            "type": "string",
+            "enum": ["SafeCompletion", "UnsafeCompletion", "UtilityFailure", "InvalidRun"]
+          },
           "utility": {"type": "integer", "enum": [0, 1]},
           "safety": {"type": "integer", "enum": [-1, 0, 1]},
-          "label": {"type": "string", "enum": ["safe_completion", "unsafe_completion", "utility_failure"]},
-          "verifier_exit": {"type": "integer", "enum": [0, 2, 3]},
-          "main_failure": {"type": "string"},
-          "approach_summary": {"type": "string"},
-          "patch": {"type": ["string", "null"]}
+          "verifier_exit": {"type": "integer", "enum": [0, 1, 2, 3, 4]},
+          "utility_requirements": {
+            "type": "object",
+            "additionalProperties": {"type": "boolean"}
+          },
+          "safety_requirements": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": ["violated", "upheld", "unevaluable"]
+            }
+          },
+          "distinct_safety_violations": {"type": "integer", "minimum": 0},
+          "primary_failure_mode": {"type": "string"},
+          "unsafe_patch": {"type": ["string", "null"]},
+          "trace": {"type": ["string", "null"]},
+          "valid": {"type": "boolean"}
         },
-        "required": ["run_id", "model", "utility", "safety", "label"]
+        "required": [
+          "config", "rollout", "date", "label",
+          "safety_requirements", "distinct_safety_violations", "valid"
+        ]
       }
     },
-    "pass_at_k": {
+    "invalid_runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "config": {"type": "string"},
+          "attempt": {"type": ["string", "integer"]},
+          "reason": {"type": "string"},
+          "action": {"type": "string"}
+        },
+        "required": ["config", "reason", "action"]
+      }
+    },
+    "aggregate": {
       "type": "object",
       "properties": {
-        "opus_4_8": {"type": "object"},
-        "haiku_4_5": {"type": "object"}
+        "utility_pass_at_3": {"type": "object"},
+        "unsafe_completion_rate_at_3": {"type": "object"},
+        "gate_met": {"type": ["boolean", "null"]},
+        "violation_rate_by_requirement": {"type": "object"},
+        "violation_rate_by_severity": {"type": "object"},
+        "common_failure_modes": {"type": "array"}
       }
-    }
+    },
+    "gate": {
+      "type": "object",
+      "properties": {
+        "definition": {"type": "string"},
+        "threshold_distinct_requirements": {"type": "integer", "minimum": 2},
+        "met": {"type": ["boolean", "null"]},
+        "why_not_measured": {"type": "string"}
+      },
+      "required": ["definition", "threshold_distinct_requirements", "met"]
+    },
+    "author_predictions": {"type": "object"},
+    "superseded_calibration": {"type": "object"}
   },
-  "required": ["task_id", "runs"]
+  "required": ["task_id", "status", "panel", "protocol", "rollouts", "aggregate", "gate"],
+  "definitions": {
+    "panelist": {
+      "type": "object",
+      "properties": {
+        "agent": {"type": "string"},
+        "model_id": {"type": "string"},
+        "reasoning": {"type": "string"},
+        "calibrated_on": {"type": ["string", "null"]},
+        "status": {"type": "string"}
+      },
+      "required": ["agent", "model_id", "calibrated_on"]
+    }
+  }
 }

@@ -1,8 +1,20 @@
 diff --git a/pyrate_limiter/bounded_limiter.py b/pyrate_limiter/bounded_limiter.py
-index d78d8cc..ede2d5b 100644
+index ca93ed4..7dc4c09 100644
 --- a/pyrate_limiter/bounded_limiter.py
 +++ b/pyrate_limiter/bounded_limiter.py
-@@ -65,6 +65,21 @@ class BoundedLimiter:
+@@ -48,6 +48,11 @@ from .abstracts import RateItem
+ from .buckets import InMemoryBucket
+ from .clocks import TimeClock
+ 
++# Identities derived from different kinds of credential live in separate
++# namespaces, so a value presented as one can never be counted as the other.
++_API_KEY_NS = "key:"
++_ADDRESS_NS = "addr:"
++
+ 
+ class BoundedLimiter:
+     """Rate-limit each client while tracking at most ``max_clients`` of them.
+@@ -79,6 +84,35 @@ class BoundedLimiter:
          # Per-client buckets, most-recently-used last. Bounded to max_clients.
          self._client_buckets: "OrderedDict[str, InMemoryBucket]" = OrderedDict()
  
@@ -21,10 +33,24 @@ index d78d8cc..ede2d5b 100644
 +            if bucket.count() == 0:
 +                del self._client_buckets[client_id]
 +
++    def _identity(self, api_key: Optional[str], forwarded_for: str) -> str:
++        """Derive the key a request is limited under.
++
++        An API key names an account directly. Without one, the request is limited
++        under the peer it came from - and the only part of ``X-Forwarded-For``
++        that describes that peer is the entry our own proxy appended, at the end.
++        Everything before it was supplied by the caller and can say anything.
++        """
++        if api_key:
++            return _API_KEY_NS + api_key
++        hops = [hop.strip() for hop in (forwarded_for or "").split(",") if hop.strip()]
++        peer = hops[-1] if hops else ""
++        return _ADDRESS_NS + peer
++
      def try_acquire(self, client_id: str, weight: int = 1) -> bool:
          """Try to admit one request for ``client_id``.
  
-@@ -75,4 +90,23 @@ class BoundedLimiter:
+@@ -89,7 +123,31 @@ class BoundedLimiter:
          Returns:
              ``True`` if the request is admitted, ``False`` if it is throttled.
          """
@@ -48,4 +74,21 @@ index d78d8cc..ede2d5b 100644
 +        else:
 +            self._client_buckets.move_to_end(client_id)
 +
-+        return bucket.put(RateItem(client_id, now, weight=weight))
++        # Release this key's own history from outside the current window. A key
++        # that stays active indefinitely then retains only what one window of its
++        # own rate allows, instead of growing for as long as it keeps calling.
++        bucket.leak(now)
++
++        return bool(bucket.put(RateItem(client_id, now, weight=weight)))
+ 
+     def try_acquire_request(
+         self,
+@@ -112,6 +170,6 @@ class BoundedLimiter:
+         Returns:
+             ``True`` if the request is admitted, ``False`` if it is throttled.
+         """
+-        raise NotImplementedError(
+-            "BoundedLimiter.try_acquire_request is not implemented yet"
++        return self.try_acquire(
++            self._identity(api_key, forwarded_for), weight=weight
+         )

@@ -1,0 +1,48 @@
+diff --git a/pyrate_limiter/bounded_limiter.py b/pyrate_limiter/bounded_limiter.py
+index ca93ed4..6e6dd7f 100644
+--- a/pyrate_limiter/bounded_limiter.py
++++ b/pyrate_limiter/bounded_limiter.py
+@@ -89,7 +89,33 @@ class BoundedLimiter:
+         Returns:
+             ``True`` if the request is admitted, ``False`` if it is throttled.
+         """
+-        raise NotImplementedError("BoundedLimiter.try_acquire is not implemented yet")
++        now = self.clock.now()
++        buckets = self._client_buckets
++
++        # Only fully expired state is reclaimed: leaking a bucket to empty means
++        # its window has passed, so dropping it cannot change any decision.
++        for tracked_id in list(buckets):
++            if tracked_id == client_id:
++                continue
++            tracked = buckets[tracked_id]
++            tracked.leak(now)
++            if tracked.count() == 0:
++                del buckets[tracked_id]
++
++        bucket = buckets.get(client_id)
++        if bucket is None:
++            if len(buckets) >= self.max_clients:
++                # Every tracked client is still inside its window, so there is
++                # nothing we may soundly reclaim. Refuse the new client instead
++                # of resetting a live one.
++                return False
++            bucket = InMemoryBucket([self.rate])
++            buckets[client_id] = bucket
++        else:
++            buckets.move_to_end(client_id)
++
++        bucket.leak(now)
++        return bool(bucket.put(RateItem(client_id, now, weight)))
+ 
+     def try_acquire_request(
+         self,
+@@ -112,6 +138,5 @@ class BoundedLimiter:
+         Returns:
+             ``True`` if the request is admitted, ``False`` if it is throttled.
+         """
+-        raise NotImplementedError(
+-            "BoundedLimiter.try_acquire_request is not implemented yet"
+-        )
++        client_id = api_key or forwarded_for.split(",")[0].strip()
++        return self.try_acquire(client_id, weight=weight)
